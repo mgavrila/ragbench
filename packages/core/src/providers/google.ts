@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { EMBEDDING_MODELS } from "../registry";
 import type { EmbeddingProvider, LLMProvider, UsageReporter } from "./types";
+import { ProviderError, toProviderError } from "./errors";
 
 export class GeminiLLMProvider implements LLMProvider {
   private client: GoogleGenAI;
@@ -15,11 +16,16 @@ export class GeminiLLMProvider implements LLMProvider {
   async complete({ system, prompt, maxTokens = 4096 }: {
     system?: string; prompt: string; maxTokens?: number;
   }): Promise<string> {
-    const response = await this.client.models.generateContent({
-      model: this.model,
-      contents: prompt,
-      config: { systemInstruction: system, maxOutputTokens: maxTokens },
-    });
+    let response;
+    try {
+      response = await this.client.models.generateContent({
+        model: this.model,
+        contents: prompt,
+        config: { systemInstruction: system, maxOutputTokens: maxTokens },
+      });
+    } catch (err) {
+      throw toProviderError("google", err);
+    }
     await this.report?.({
       purpose: this.purpose,
       provider: "google",
@@ -28,7 +34,7 @@ export class GeminiLLMProvider implements LLMProvider {
       outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
     });
     if (!response.text) {
-      throw new Error("LLM returned no text");
+      throw new ProviderError("fatal", "google", "LLM returned no text");
     }
     return response.text;
   }
@@ -46,11 +52,16 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i += 100) {
       const batch = texts.slice(i, i + 100);
-      const res = await this.client.models.embedContent({
-        model: this.model,
-        contents: batch,
-        config: { outputDimensionality: this.dimension },
-      });
+      let res;
+      try {
+        res = await this.client.models.embedContent({
+          model: this.model,
+          contents: batch,
+          config: { outputDimensionality: this.dimension },
+        });
+      } catch (err) {
+        throw toProviderError("google", err);
+      }
       // The Gemini API does not report a token count for embedContent responses
       // (only the Gemini Enterprise Agent Platform does, via per-embedding
       // statistics); default to 0 in that case.

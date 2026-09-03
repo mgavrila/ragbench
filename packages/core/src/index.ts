@@ -1,5 +1,6 @@
 export * from "./registry";
 export * from "./providers/types";
+export * from "./providers/errors";
 export * from "./providers/mock";
 export * from "./providers/anthropic";
 export * from "./providers/openai";
