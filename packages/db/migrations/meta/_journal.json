@@ -15,6 +15,13 @@
       "when": 1788458294243,
       "tag": "0001_gifted_ares",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788464015690,
+      "tag": "0002_polite_whirlwind",
+      "breakpoints": true
     }
   ]
 }

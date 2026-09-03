@@ -65,6 +65,33 @@ describe("chunkHandler", () => {
     expect(sentJobs).toEqual([]);
   });
 
+  it("batches inserts for a document producing more than 5,000 chunks, all inside one transaction", async () => {
+    // Own project: a chunk set chunks every ready document in its project, so this document must
+    // not share the outer describe block's project (with "a.md") or its chunks would be mixed in
+    // and the exact-count assertion below would be wrong.
+    // 65,535 bind-param cap / 6 params per chunk row means a single INSERT statement tops out
+    // around 10,922 rows; batching at 5,000 keeps a comfortable margin and forces at least three
+    // batches for this document.
+    const [bigProject] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "big-proj" }).returning();
+    const wordCount = 12_000;
+    const bigText = Array.from({ length: wordCount }, (_, i) => `w${i}`).join(" ");
+    await ctx.db.insert(documents).values({
+      projectId: bigProject.id, filename: "big.md", mime: "text/markdown", contentHash: "h-big", status: "ready",
+      text: bigText,
+    });
+    const bigParams = { maxTokens: 1, overlapTokens: 0 };
+    const [bigSet] = await ctx.db.insert(chunkSets).values({
+      projectId: bigProject.id, chunker: "fixed", params: bigParams, paramsHash: hashParams(bigParams),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: bigSet.id }, { db: ctx.db, boss: recordingBoss });
+
+    const rows = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, bigSet.id));
+    expect(rows.length).toBe(wordCount);
+    const idxs = rows.map((r) => r.idx).sort((a, b) => a - b);
+    expect(idxs).toEqual(Array.from({ length: wordCount }, (_, i) => i));
+  });
+
   it("chains the embed job after the rebuild has committed", async () => {
     sentJobs.length = 0;
     await chunkHandler(
@@ -78,6 +105,73 @@ describe("chunkHandler", () => {
     expect(job.opts).toEqual({ singletonKey: `${setId}:mock-embedding` });
     // The whole point of chaining: the chunks the embed job will read are already committed.
     expect(job.chunksVisible).toBeGreaterThan(0);
+  });
+});
+
+describe("chunkHandler rebuild-skip", () => {
+  it("skips teardown when nothing changed since the last rebuild, but still chains embed", async () => {
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "skip-proj" }).returning();
+    await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "s1.md", mime: "text/markdown", contentHash: "skip-h1", status: "ready",
+      text: "one two three four five six seven eight",
+    });
+    const params = { maxTokens: 4, overlapTokens: 1 };
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params, paramsHash: hashParams(params),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+    const first = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    expect(first.length).toBeGreaterThan(0);
+    const firstIds = first.map((c) => c.id).sort();
+    const [setRowAfterFirst] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    expect(setRowAfterFirst.docsFingerprint).not.toBeNull();
+
+    sentJobs.length = 0;
+    await chunkHandler(
+      { chunkSetId: set.id, embedModel: "mock-embedding", organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+    );
+
+    const second = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    // No teardown happened: the exact same rows (same IDs) are still there.
+    expect(second.map((c) => c.id).sort()).toEqual(firstIds);
+    // The embed chain still fires on a skipped rebuild.
+    expect(sentJobs).toHaveLength(1);
+    expect(sentJobs[0].name).toBe("embed");
+    expect(sentJobs[0].data).toEqual({ chunkSetId: set.id, model: "mock-embedding", organizationId: orgId });
+  });
+
+  it("rebuilds when a document becomes ready, changing the fingerprint", async () => {
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "skip-proj-2" }).returning();
+    await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "r1.md", mime: "text/markdown", contentHash: "reb-h1", status: "ready",
+      text: "one two three four five six seven eight",
+    });
+    const [pendingDoc] = await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "r2.md", mime: "text/markdown", contentHash: "reb-h2", status: "parsing",
+      text: "nine ten eleven twelve thirteen fourteen",
+    }).returning();
+    const params = { maxTokens: 4, overlapTokens: 1 };
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params, paramsHash: hashParams(params),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+    const first = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    const firstIds = first.map((c) => c.id).sort();
+    const [setRowBefore] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    const fingerprintBefore = setRowBefore.docsFingerprint;
+
+    await ctx.db.update(documents).set({ status: "ready" }).where(eq(documents.id, pendingDoc.id));
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+
+    const second = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    expect(second.map((c) => c.id).sort()).not.toEqual(firstIds); // teardown happened: fresh row IDs
+    expect(new Set(second.map((c) => c.documentId)).size).toBe(2); // both docs now chunked
+
+    const [setRowAfter] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    expect(setRowAfter.docsFingerprint).not.toBe(fingerprintBefore);
   });
 });
 

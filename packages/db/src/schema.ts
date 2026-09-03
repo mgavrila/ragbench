@@ -53,7 +53,7 @@ export const documents = pgTable("documents", {
   mime: text("mime").notNull(),
   contentHash: text("content_hash").notNull(),
   text: text("text"),
-  status: text("status").notNull().default("parsing"), // parsing | ready | failed
+  status: text("status").notNull().default("parsing"), // parsing | ready | duplicate | failed
   error: text("error"),
   createdAt: createdAt(),
 }, (t) => [index("documents_project_idx").on(t.projectId)]);
@@ -64,6 +64,10 @@ export const chunkSets = pgTable("chunk_sets", {
   chunker: text("chunker").notNull(), // fixed | heading | sentence-window
   params: jsonb("params").notNull().$type<Record<string, unknown>>(),
   paramsHash: text("params_hash").notNull(),
+  // sha256(paramsHash + ":" + sorted-joined contentHashes of the ready docs chunked last rebuild).
+  // Null until the first rebuild. Lets chunkHandler skip a delete-and-recreate when nothing about
+  // the params or the ready document set has changed since the last rebuild.
+  docsFingerprint: text("docs_fingerprint"),
   createdAt: createdAt(),
 }, (t) => [
   uniqueIndex("chunk_sets_uniq").on(t.projectId, t.chunker, t.paramsHash),
@@ -110,6 +114,9 @@ export const testSets = pgTable("test_sets", {
   projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }).notNull(),
   name: text("name").notNull(),
   generatorModel: text("generator_model").notNull(),
+  status: text("status").notNull().default("generating"), // generating | ready | failed
+  error: text("error"),
+  questionsTarget: integer("questions_target").notNull().default(30),
   createdAt: createdAt(),
 });
 
