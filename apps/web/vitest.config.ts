@@ -4,6 +4,7 @@ export default defineConfig({
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
   test: {
     include: ["test/**/*.test.ts"],
+    globalSetup: ["./test/global-setup.ts"],
     fileParallelism: false,
     // next-auth is pure ESM and imports subpaths of `next` (e.g. "next/server")
     // without an extension; this `next` build has no "exports" map, so Node's
