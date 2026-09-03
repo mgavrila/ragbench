@@ -23,6 +23,7 @@ type Doc = { id: string; text: string };
 type DropCounts = {
   verificationFailed: number;
   answerNotInQuote: number;
+  alreadyAsked: number;
   gateTrivial: number;
   parseEmpty: number;
 };
@@ -32,6 +33,7 @@ export function describeGeneration(kept: number, wanted: number, drops: DropCoun
   const reasons = [
     [drops.verificationFailed, "quote failed verification", "quotes failed verification"],
     [drops.answerNotInQuote, "answer was not inside its quote", "answers were not inside their quote"],
+    [drops.alreadyAsked, "question was already asked", "questions were already asked"],
     [drops.gateTrivial, "question was dropped as trivial", "questions were dropped as trivial"],
     [drops.parseEmpty, "passage produced no candidates", "passages produced no candidates"],
   ] as const;
@@ -176,7 +178,7 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
 
       let kept = 0;
       const drops: DropCounts = {
-        verificationFailed: 0, answerNotInQuote: 0, gateTrivial: 0, parseEmpty: 0,
+        verificationFailed: 0, answerNotInQuote: 0, alreadyAsked: 0, gateTrivial: 0, parseEmpty: 0,
       };
       try {
         // Constructed inside the try so a provider SDK that throws from its constructor (a
@@ -224,12 +226,16 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
             // the model's `answer`, which the prompt requires to sit inside that quote. Without
             // this check a model that answers alongside its quote instead of from within it stores
             // an answer the span does not contain -- ground truth that contradicts its own offsets.
-            if (!normalizeWs(candidate.quote).includes(normalizeWs(candidate.answer))) {
+            // An empty normalized answer (blank, or whitespace-only) is rejected the same way: it
+            // trivially "contains" as a substring of anything, so without the length check it would
+            // pass containment and store ground truth with no actual answer text.
+            const normalizedAnswer = normalizeWs(candidate.answer);
+            if (normalizedAnswer.length === 0 || !normalizeWs(candidate.quote).includes(normalizedAnswer)) {
               drops.answerNotInQuote++;
               continue;
             }
             const key = questionKey(doc.id, candidate.question);
-            if (asked.has(key)) continue;
+            if (asked.has(key)) { drops.alreadyAsked++; continue; }
 
             // Gate failures never reach the catch below: passesTrivialityGate owns them and keeps
             // the question, so only the generator call can fail or retry the set.

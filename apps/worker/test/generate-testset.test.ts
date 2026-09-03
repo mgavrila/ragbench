@@ -115,7 +115,9 @@ describe("roundRobinPassages", () => {
 });
 
 describe("describeGeneration", () => {
-  const noDrops = { verificationFailed: 0, answerNotInQuote: 0, gateTrivial: 0, parseEmpty: 0 };
+  const noDrops = {
+    verificationFailed: 0, answerNotInQuote: 0, alreadyAsked: 0, gateTrivial: 0, parseEmpty: 0,
+  };
 
   it("reports the count alone when nothing was dropped", () => {
     expect(describeGeneration(6, 6, noDrops)).toBe("generated 6 of 6");
@@ -123,18 +125,23 @@ describe("describeGeneration", () => {
 
   it("names every reason a candidate was dropped", () => {
     const text = describeGeneration(0, 10, {
-      verificationFailed: 4, answerNotInQuote: 3, gateTrivial: 2, parseEmpty: 1,
+      verificationFailed: 4, answerNotInQuote: 3, alreadyAsked: 5, gateTrivial: 2, parseEmpty: 1,
     });
 
     expect(text).toBe(
       "generated 0 of 10: 4 quotes failed verification, 3 answers were not inside their quote, "
-      + "2 questions were dropped as trivial, 1 passage produced no candidates",
+      + "5 questions were already asked, 2 questions were dropped as trivial, 1 passage produced no candidates",
     );
   });
 
   it("lists only the reasons that actually fired", () => {
     expect(describeGeneration(1, 4, { ...noDrops, verificationFailed: 1 }))
       .toBe("generated 1 of 4: 1 quote failed verification");
+  });
+
+  it("uses the singular phrasing for a single repeat", () => {
+    expect(describeGeneration(2, 3, { ...noDrops, alreadyAsked: 1 }))
+      .toBe("generated 2 of 3: 1 question was already asked");
   });
 });
 

@@ -49,6 +49,8 @@ export async function listChunkSets(projectId: string, session: Session | null) 
       chunker: chunkSets.chunker,
       params: chunkSets.params,
       paramsHash: chunkSets.paramsHash,
+      embedModels: chunkSets.embedModels,
+      embedError: chunkSets.embedError,
       createdAt: chunkSets.createdAt,
       chunkCount: sql<number>`count(${chunks.id})`.mapWith(Number),
     })
@@ -92,19 +94,33 @@ export async function createChunkSet(
     status = 200;
   }
 
+  // The set remembers every embedding model it has ever been asked for, appended here (before the
+  // chunk job is enqueued) rather than carried in the job payload. Writing it to the row first --
+  // and having chunkHandler read it back post-commit -- is what makes a concurrent re-POST for a
+  // second model safe: it can land its append after this job already started without being
+  // dropped, because chunkHandler re-reads the row instead of trusting a payload snapshot.
+  if (embedModel && !chunkSet.embedModels.includes(embedModel)) {
+    const [updated] = await db.update(chunkSets)
+      .set({ embedModels: [...chunkSet.embedModels, embedModel] })
+      .where(eq(chunkSets.id, chunkSet.id))
+      .returning();
+    chunkSet = updated;
+  }
+
   // Only the chunk job is sent, even when embedding was requested: chunkHandler enqueues embed
   // itself once its rebuild has committed. Sending both from here raced -- embed could start
   // against the previous rebuild's chunks (or none at all) and then find nothing left to do.
   //
   // Both the created and the existing-set path enqueue, so re-POSTing an existing set re-chunks
-  // the project's current documents and re-embeds them. That is the point: documents uploaded
-  // after the set was created are otherwise never chunked into it. The chunk queue is exclusive on
-  // this singletonKey, so a re-POST while a rebuild is already in flight is dropped by pg-boss
-  // rather than queued twice.
+  // the project's current documents and re-embeds them (every model the set has ever been asked
+  // for, per the embedModels append above). That is the point: documents uploaded after the set
+  // was created are otherwise never chunked into it. The chunk queue is exclusive on this
+  // singletonKey, so a re-POST while a rebuild is already in flight is dropped by pg-boss rather
+  // than queued twice.
   try {
     await send(
       "chunk",
-      { chunkSetId: chunkSet.id, embedModel, organizationId: session.user.organizationId },
+      { chunkSetId: chunkSet.id, organizationId: session.user.organizationId },
       chunkSet.id,
     );
   } catch {

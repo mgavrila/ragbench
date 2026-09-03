@@ -1,29 +1,21 @@
-import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { chunkSets, chunks, documents } from "@ragbench/db";
+import { chunkSets, chunks, computeFingerprint, documents } from "@ragbench/db";
 import { CHUNKERS } from "@ragbench/core";
 import { enqueue, type JobHandler } from "../queue";
+
+// Moved to @ragbench/db (packages/db/src/fingerprint.ts) so the web runs route can compute it
+// too, without depending on the worker package. Re-exported here for compatibility.
+export { computeFingerprint } from "@ragbench/db";
 
 // Postgres caps a single statement at 65,535 bind parameters. Each chunk row binds 6 (chunkSetId,
 // documentId, idx, text, startOffset, endOffset), so one statement tops out around 10,922 rows;
 // 5,000 keeps a comfortable margin below that.
 const INSERT_BATCH_SIZE = 5000;
 
-// Identifies "nothing that would change the chunks has changed since the last rebuild": the
-// chunker params (via the set's already-stored paramsHash) and the exact set of ready documents'
-// content (via their contentHashes, sorted so document order doesn't matter). A doc flipping to
-// "ready" or "duplicate"/"failed" changes which contentHashes are in the join, so it changes the
-// fingerprint and forces a rebuild.
-export function computeFingerprint(paramsHash: string, readyDocs: { contentHash: string }[]): string {
-  const sortedHashes = readyDocs.map((d) => d.contentHash).sort().join(",");
-  return createHash("sha256").update(`${paramsHash}:${sortedHashes}`).digest("hex");
-}
-
 export const chunkHandler: JobHandler<{
   chunkSetId: string;
-  embedModel?: string;
   organizationId?: string;
-}> = async ({ chunkSetId, embedModel, organizationId }, { db, boss }) => {
+}> = async ({ chunkSetId, organizationId }, { db, boss }) => {
   const [set] = await db.select().from(chunkSets).where(eq(chunkSets.id, chunkSetId));
   if (!set) return;
   const chunker = CHUNKERS[set.chunker];
@@ -31,7 +23,7 @@ export const chunkHandler: JobHandler<{
   const docs = await db.select().from(documents)
     .where(and(eq(documents.projectId, set.projectId), eq(documents.status, "ready")));
 
-  const fingerprint = computeFingerprint(set.paramsHash, docs);
+  const fingerprint = computeFingerprint(set.paramsHash, docs.map((d) => d.contentHash));
   const [existingChunk] = await db.select({ id: chunks.id }).from(chunks)
     .where(eq(chunks.chunkSetId, chunkSetId)).limit(1);
 
@@ -73,7 +65,17 @@ export const chunkHandler: JobHandler<{
   // before it) leaves the chunks built but unembedded; pg-boss retries the whole job, and both
   // halves are idempotent -- the rebuild replaces the same rows and embed skips chunks it has
   // already embedded.
-  if (embedModel && organizationId) {
-    await enqueue(boss, "embed", { chunkSetId, model: embedModel, organizationId }, `${chunkSetId}:${embedModel}`);
+  //
+  // Read fresh (not from the `set` selected at the top) rather than trusting the payload: the
+  // chunk-sets route appends a requested model to the row before it enqueues this job, but a
+  // concurrent re-POST can append a second model while this job's rebuild above is still running.
+  // Reading post-commit picks that model up too instead of dropping it -- the set remembers every
+  // model it was ever asked to embed, and a rebuild re-chains all of them.
+  if (organizationId) {
+    const [current] = await db.select({ embedModels: chunkSets.embedModels })
+      .from(chunkSets).where(eq(chunkSets.id, chunkSetId));
+    for (const model of current?.embedModels ?? []) {
+      await enqueue(boss, "embed", { chunkSetId, model, organizationId }, `${chunkSetId}:${model}`);
+    }
   }
 };

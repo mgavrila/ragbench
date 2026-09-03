@@ -83,7 +83,13 @@ export function QuestionsClient({ testSetId, initialTestSet }: { testSetId: stri
             shown plainly rather than framed as a shortfall. */}
         {questions.length} questions &middot; target {testSet.questionsTarget}
       </p>
-      {testSet.error ? <p role="alert">{testSet.error}</p> : null}
+      {/* A failed set's error is an alert; a ready set's is an advisory (e.g. "kept 0 of 30: ...")
+          describing a shortfall, not a failure -- it must not read as one. */}
+      {testSet.error ? (
+        testSet.status === "failed"
+          ? <p role="alert" style={{ color: "#cf222e" }}>{testSet.error}</p>
+          : <p>{testSet.error}</p>
+      ) : null}
       {deleteError ? <p role="alert">{deleteError}</p> : null}
 
       <table style={{ borderCollapse: "collapse" }}>

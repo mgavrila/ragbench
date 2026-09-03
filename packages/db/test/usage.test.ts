@@ -36,4 +36,12 @@ describe("makeUsageReporter", () => {
     expect(small.costUsd).toBeCloseTo(0.02);
     expect(unknown.costUsd).toBe(0);
   });
+
+  it("resolves without throwing when the insert fails, metering being advisory-only", async () => {
+    const poisonedDb = { insert: () => ({ values: () => { throw new Error("connection reset"); } }) };
+    const report = makeUsageReporter(poisonedDb as never, orgId);
+    await expect(report({
+      purpose: "testset", provider: "anthropic", model: "claude-opus-5", inputTokens: 10, outputTokens: 10,
+    })).resolves.toBeUndefined();
+  });
 });

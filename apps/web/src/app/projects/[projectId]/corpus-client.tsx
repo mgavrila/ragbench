@@ -16,6 +16,8 @@ type ChunkSet = {
   chunker: string;
   params: Record<string, unknown>;
   paramsHash: string;
+  embedModels: string[];
+  embedError: string | null;
   createdAt: string;
   chunkCount: number;
 };
@@ -128,6 +130,8 @@ export function CorpusClient({ projectId }: { projectId: string }) {
               <th style={cellStyle}>Chunker</th>
               <th style={cellStyle}>Params hash</th>
               <th style={cellStyle}>Chunks</th>
+              <th style={cellStyle}>Embed models</th>
+              <th style={cellStyle}>Embed error</th>
             </tr>
           </thead>
           <tbody>
@@ -136,6 +140,8 @@ export function CorpusClient({ projectId }: { projectId: string }) {
                 <td style={cellStyle}>{s.chunker}</td>
                 <td style={cellStyle}>{s.paramsHash.slice(0, 8)}</td>
                 <td style={cellStyle}>{s.chunkCount}</td>
+                <td style={cellStyle}>{s.embedModels.join(", ")}</td>
+                <td style={{ ...cellStyle, color: s.embedError ? "#cf222e" : undefined }}>{s.embedError ?? ""}</td>
               </tr>
             ))}
           </tbody>

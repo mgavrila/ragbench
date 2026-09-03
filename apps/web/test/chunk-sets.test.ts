@@ -26,25 +26,43 @@ beforeAll(async () => {
 describe("chunk-sets api", () => {
   let setId: string;
 
-  it("creates a set and enqueues only the chunk job, carrying the embed model", async () => {
+  it("creates a set, records the embed model on the row, and enqueues only the chunk job", async () => {
     const res = await createChunkSet(projectId, req({ chunker: "fixed", params: { maxTokens: 50 }, embedModel: "mock-embedding" }), session() as never, fakeSend);
     expect(res.status).toBe(201);
     const { chunkSet } = await res.json();
     setId = chunkSet.id;
-    // embed is chained by chunkHandler after its rebuild commits, never dispatched from here.
+    expect(chunkSet.embedModels).toEqual(["mock-embedding"]);
+    // embed is chained by chunkHandler (reading embedModels off the row post-commit), never
+    // dispatched from here, and the payload no longer carries embedModel at all.
     expect(sent.map((s) => s.queue)).toEqual(["chunk"]);
     expect(sent[0].key).toBe(chunkSet.id);
-    expect(sent[0].data).toEqual({ chunkSetId: chunkSet.id, embedModel: "mock-embedding", organizationId: orgId });
+    expect(sent[0].data).toEqual({ chunkSetId: chunkSet.id, organizationId: orgId });
   });
 
   it("returns the existing set on re-POST and re-enqueues the rebuild", async () => {
     sent.length = 0;
     const again = await createChunkSet(projectId, req({ chunker: "fixed", params: { maxTokens: 50 }, embedModel: "mock-embedding" }), session() as never, fakeSend);
     expect(again.status).toBe(200); // existing set returned, no duplicate row
-    expect((await again.json()).chunkSet.id).toBe(setId);
+    const { chunkSet } = await again.json();
+    expect(chunkSet.id).toBe(setId);
+    // Already-recorded model is not duplicated.
+    expect(chunkSet.embedModels).toEqual(["mock-embedding"]);
     // Re-chunking is the point: documents uploaded since the set was created belong in it too.
     expect(sent.map((s) => s.queue)).toEqual(["chunk"]);
     expect(sent[0].key).toBe(setId);
+  });
+
+  it("appends a second embed model to an existing set instead of dropping it", async () => {
+    sent.length = 0;
+    const res = await createChunkSet(
+      projectId, req({ chunker: "fixed", params: { maxTokens: 50 }, embedModel: "text-embedding-3-small" }),
+      session() as never, fakeSend,
+    );
+    expect(res.status).toBe(200);
+    const { chunkSet } = await res.json();
+    expect(chunkSet.id).toBe(setId);
+    expect(chunkSet.embedModels).toEqual(["mock-embedding", "text-embedding-3-small"]);
+    expect(sent[0].data).toEqual({ chunkSetId: setId, organizationId: orgId });
   });
 
   it("rejects unknown chunkers and embedding models, including inherited Object keys", async () => {

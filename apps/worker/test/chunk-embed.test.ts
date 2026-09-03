@@ -3,7 +3,7 @@ import { eq, and } from "drizzle-orm";
 import {
   createDb, organizations, projects, documents, chunkSets, chunks, chunkEmbeddings, usageLog,
 } from "@ragbench/db";
-import { hashParams } from "@ragbench/core";
+import { hashParams, makeEmbedder, ProviderError } from "@ragbench/core";
 import { chunkHandler } from "../src/handlers/chunk";
 import { embedHandler } from "../src/handlers/embed";
 
@@ -59,10 +59,18 @@ describe("chunkHandler", () => {
     expect(after).toBe(before);
   });
 
-  it("enqueues nothing when the payload carries no embed model", async () => {
+  it("enqueues nothing when the set has no embed models recorded", async () => {
+    sentJobs.length = 0;
+    await chunkHandler({ chunkSetId: setId, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+    expect(sentJobs).toEqual([]);
+  });
+
+  it("enqueues nothing without an organizationId, even if the set has embed models recorded", async () => {
+    await ctx.db.update(chunkSets).set({ embedModels: ["mock-embedding"] }).where(eq(chunkSets.id, setId));
     sentJobs.length = 0;
     await chunkHandler({ chunkSetId: setId }, { db: ctx.db, boss: recordingBoss });
     expect(sentJobs).toEqual([]);
+    await ctx.db.update(chunkSets).set({ embedModels: [] }).where(eq(chunkSets.id, setId)); // reset for later tests
   });
 
   it("batches inserts for a document producing more than 5,000 chunks, all inside one transaction", async () => {
@@ -92,19 +100,28 @@ describe("chunkHandler", () => {
     expect(idxs).toEqual(Array.from({ length: wordCount }, (_, i) => i));
   });
 
-  it("chains the embed job after the rebuild has committed", async () => {
+  it("chains one embed job per model recorded on the set, read fresh after the rebuild commits", async () => {
+    // The chunk-sets route is what normally appends to embedModels; a direct update stands in for
+    // it here, and two models prove chunkHandler chains all of them, not just the payload's (there
+    // is no embedModel in the payload anymore).
+    await ctx.db.update(chunkSets).set({ embedModels: ["mock-embedding", "text-embedding-3-small"] })
+      .where(eq(chunkSets.id, setId));
     sentJobs.length = 0;
-    await chunkHandler(
-      { chunkSetId: setId, embedModel: "mock-embedding", organizationId: orgId },
-      { db: ctx.db, boss: recordingBoss },
-    );
-    expect(sentJobs).toHaveLength(1);
-    const [job] = sentJobs;
-    expect(job.name).toBe("embed");
-    expect(job.data).toEqual({ chunkSetId: setId, model: "mock-embedding", organizationId: orgId });
-    expect(job.opts).toEqual({ singletonKey: `${setId}:mock-embedding` });
-    // The whole point of chaining: the chunks the embed job will read are already committed.
-    expect(job.chunksVisible).toBeGreaterThan(0);
+    await chunkHandler({ chunkSetId: setId, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+    expect(sentJobs).toHaveLength(2);
+    expect(sentJobs.map((j) => j.name)).toEqual(["embed", "embed"]);
+    expect(sentJobs.map((j) => j.data)).toEqual([
+      { chunkSetId: setId, model: "mock-embedding", organizationId: orgId },
+      { chunkSetId: setId, model: "text-embedding-3-small", organizationId: orgId },
+    ]);
+    expect(sentJobs.map((j) => j.opts)).toEqual([
+      { singletonKey: `${setId}:mock-embedding` },
+      { singletonKey: `${setId}:text-embedding-3-small` },
+    ]);
+    // The whole point of chaining: the chunks the embed jobs will read are already committed.
+    expect(sentJobs.every((j) => j.chunksVisible > 0)).toBe(true);
+
+    await ctx.db.update(chunkSets).set({ embedModels: ["mock-embedding"] }).where(eq(chunkSets.id, setId));
   });
 });
 
@@ -127,9 +144,10 @@ describe("chunkHandler rebuild-skip", () => {
     const [setRowAfterFirst] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
     expect(setRowAfterFirst.docsFingerprint).not.toBeNull();
 
+    await ctx.db.update(chunkSets).set({ embedModels: ["mock-embedding"] }).where(eq(chunkSets.id, set.id));
     sentJobs.length = 0;
     await chunkHandler(
-      { chunkSetId: set.id, embedModel: "mock-embedding", organizationId: orgId },
+      { chunkSetId: set.id, organizationId: orgId },
       { db: ctx.db, boss: recordingBoss },
     );
 
@@ -193,5 +211,66 @@ describe("embedHandler", () => {
     const before = (await ctx.db.select().from(chunkEmbeddings)).length;
     await embedHandler({ chunkSetId: setId, model: "mock-embedding", organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
     expect((await ctx.db.select().from(chunkEmbeddings)).length).toBe(before);
+  });
+});
+
+describe("embedHandler failure visibility", () => {
+  // A stub embedder, injected via embedHandler's third (test-only) parameter: the real provider
+  // SDKs don't fail deterministically without network or valid-looking credentials, so a poisoned
+  // stub is what stands in for "a provider call that fails" here.
+  const poisoned = (err: Error): typeof makeEmbedder => () => ({
+    model: "poison", dimension: 3,
+    async embed(): Promise<number[][]> { throw err; },
+  });
+
+  // A model distinct from "mock-embedding" (already fully embedded for setId by the describe
+  // block above) so `pending` is non-empty and the stub's embed() actually gets called.
+  const poisonModel = "text-embedding-3-small";
+
+  it("marks chunkSets.embedError, model-prefixed, on a non-retryable provider failure, without throwing", async () => {
+    const err = new ProviderError("auth", "poison", "no credentials");
+    await expect(embedHandler(
+      { chunkSetId: setId, model: poisonModel, organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+      poisoned(err),
+    )).resolves.toBeUndefined();
+
+    const [row] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, setId));
+    expect(row.embedError).toBe(`${poisonModel}: no credentials`);
+  });
+
+  it("rethrows a retryable provider failure and leaves embedError untouched for pg-boss to retry", async () => {
+    await ctx.db.update(chunkSets).set({ embedError: null }).where(eq(chunkSets.id, setId));
+    const err = new ProviderError("rate_limit", "poison", "slow down");
+
+    await expect(embedHandler(
+      { chunkSetId: setId, model: poisonModel, organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+      poisoned(err),
+    )).rejects.toThrow("slow down");
+
+    const [row] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, setId));
+    expect(row.embedError).toBeNull();
+  });
+
+  it("propagates a failure that is not a ProviderError untouched (a DB fault, a bug), never as embedError", async () => {
+    const bug = new TypeError("undefined is not a function");
+    await expect(embedHandler(
+      { chunkSetId: setId, model: poisonModel, organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+      poisoned(bug),
+    )).rejects.toThrow(bug);
+
+    const [row] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, setId));
+    expect(row.embedError).toBeNull();
+  });
+
+  it("clears an existing embedError on the next successful embed", async () => {
+    await ctx.db.update(chunkSets).set({ embedError: "mock-embedding: stale failure" }).where(eq(chunkSets.id, setId));
+
+    await embedHandler({ chunkSetId: setId, model: "mock-embedding", organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+
+    const [row] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, setId));
+    expect(row.embedError).toBeNull();
   });
 });

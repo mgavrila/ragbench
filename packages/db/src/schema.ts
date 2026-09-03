@@ -68,6 +68,16 @@ export const chunkSets = pgTable("chunk_sets", {
   // Null until the first rebuild. Lets chunkHandler skip a delete-and-recreate when nothing about
   // the params or the ready document set has changed since the last rebuild.
   docsFingerprint: text("docs_fingerprint"),
+  // Every embedding model ever requested for this set, appended to (never removed from) by the
+  // chunk-sets route before it enqueues a rebuild. chunkHandler reads this post-commit and chains
+  // one embed job per model, so a rebuild re-embeds every model the set has ever been asked for --
+  // closing the residual where a concurrent re-POST for a second model could get dropped.
+  embedModels: jsonb("embed_models").notNull().$type<string[]>().default([]),
+  // Terminal, visible failure from the most recent embed attempt (house failure philosophy: a
+  // non-retryable provider failure belongs to the entity it failed, not a silent retry loop).
+  // Model-prefixed so a set embedding under several models doesn't lose which one failed. Cleared
+  // to null on the next successful embed.
+  embedError: text("embed_error"),
   createdAt: createdAt(),
 }, (t) => [
   uniqueIndex("chunk_sets_uniq").on(t.projectId, t.chunker, t.paramsHash),
@@ -107,7 +117,10 @@ export const ragConfigs = pgTable("rag_configs", {
   embeddingModel: text("embedding_model").notNull(),
   topK: integer("top_k").notNull(),
   createdAt: createdAt(),
-});
+}, (t) => [
+  index("rag_configs_project_idx").on(t.projectId),
+  index("rag_configs_chunk_set_idx").on(t.chunkSetId),
+]);
 
 export const testSets = pgTable("test_sets", {
   id: id(),
@@ -137,11 +150,15 @@ export const evalRuns = pgTable("eval_runs", {
   testSetId: uuid("test_set_id").references(() => testSets.id, { onDelete: "cascade" }).notNull(),
   mode: text("mode").notNull(), // full | retrieval-only
   judgeModel: text("judge_model"),
+  answerModel: text("answer_model"), // full-mode answer generation model
   status: text("status").notNull().default("pending"), // pending | running | done | cancelled | failed
   totalJobs: integer("total_jobs").notNull().default(0),
   completedJobs: integer("completed_jobs").notNull().default(0),
   createdAt: createdAt(),
-});
+}, (t) => [
+  index("eval_runs_project_idx").on(t.projectId),
+  index("eval_runs_test_set_idx").on(t.testSetId),
+]);
 
 export const evalRunConfigs = pgTable("eval_run_configs", {
   id: id(),
@@ -166,6 +183,8 @@ export const questionResults = pgTable("question_results", {
 }, (t) => [
   uniqueIndex("question_results_uniq").on(t.runId, t.configId, t.questionId),
   index("question_results_run_idx").on(t.runId),
+  index("question_results_config_idx").on(t.configId),
+  index("question_results_question_idx").on(t.questionId),
 ]);
 
 export const attributions = pgTable("attributions", {
@@ -176,4 +195,4 @@ export const attributions = pgTable("attributions", {
   explanation: text("explanation"),
   evidenceChunkIds: jsonb("evidence_chunk_ids").$type<string[]>(),
   createdAt: createdAt(),
-});
+}, (t) => [index("attributions_result_idx").on(t.resultId)]);
