@@ -36,6 +36,15 @@ describe("signup + credentials", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects passwords longer than bcrypt's 72-byte limit with 400", async () => {
+    const res = await signup(req({
+      email: `long${Date.now()}@test.dev`,
+      password: "a".repeat(73),
+      organizationName: "Acme",
+    }));
+    expect(res.status).toBe(400);
+  });
+
   it("verifies correct credentials and rejects wrong ones", async () => {
     expect(await verifyCredentials(email, "hunter2xx")).toMatchObject({
       organizationId: expect.any(String),
