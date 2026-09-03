@@ -13,6 +13,7 @@ describe("worker queue", () => {
     const { boss, stop } = await startWorker({ databaseUrl: URL, handlers: {} });
     await boss.deleteAllJobs("echo");
     await boss.deleteAllJobs("noop");
+    await boss.deleteAllJobs("fanout");
     await stop();
   });
 
@@ -31,6 +32,26 @@ describe("worker queue", () => {
     }
     await stop();
     expect(seen).toEqual(["hello"]);
+  });
+
+  // The counterpart to the dedupe test below, and the behaviour every fan-out stage depends on:
+  // "exclusive" serializes jobs that share a singletonKey, so distinct keys on one queue name
+  // must all be accepted and all run.
+  it("runs every job when the singletonKeys differ", async () => {
+    const seen: string[] = [];
+    const { boss, stop } = await startWorker({
+      databaseUrl: URL,
+      handlers: {
+        fanout: async (data: { id: string }) => { seen.push(data.id); },
+      },
+    });
+    for (const id of ["a", "b", "c"]) await enqueue(boss, "fanout", { id }, id);
+    const deadline = Date.now() + 20000;
+    while (seen.length < 3 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await stop();
+    expect([...seen].sort()).toEqual(["a", "b", "c"]);
   });
 
   it("deduplicates on singletonKey", async () => {

@@ -33,8 +33,10 @@ export async function startWorker(opts: {
           `pg-boss cannot update an existing queue's policy -- drop it (boss.deleteQueue) and restart`,
       );
     }
-    await boss.work(name, async ([job]) => {
-      await handler(job.data, { db, boss });
+    // work() hands over an array because pg-boss can fetch in batches; iterate rather than
+    // destructuring the first element, so raising batchSize later cannot silently drop jobs.
+    await boss.work(name, async (jobs) => {
+      for (const job of jobs) await handler(job.data, { db, boss });
     });
   }
 
