@@ -1,3 +1,4 @@
 export * from "./schema";
 export * from "./client";
 export * from "./usage";
+export * from "./files";

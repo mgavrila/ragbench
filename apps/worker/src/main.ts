@@ -1,5 +1,6 @@
 import { migrateDb } from "@ragbench/db";
 import { startWorker } from "./queue";
+import { parseHandler } from "./handlers/parse";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 
@@ -12,7 +13,8 @@ console.log("ragbench migrations applied");
 const { stop } = await startWorker({
   databaseUrl,
   handlers: {
-    // pipeline handlers land here in later plans: parse, embed,
+    parse: parseHandler,
+    // remaining pipeline handlers land here in later plans: embed,
     // generate-testset, evaluate-question, attribute
   },
 });
