@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { createDb, migrateDb } from "../src/client";
-import { organizations, projects, chunkEmbeddings, chunkSets, chunks, documents } from "../src/schema";
+import { organizations, projects, chunkEmbeddings, chunkSets, chunks, documents, testSets } from "../src/schema";
 
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 let ctx: Awaited<ReturnType<typeof createDb>>;
@@ -61,5 +61,29 @@ describe("schema", () => {
     await ctx.db.delete(documents).where(eq(documents.id, doc.id));
     expect(await ctx.db.select().from(chunks).where(eq(chunks.documentId, doc.id))).toHaveLength(0);
     expect(await ctx.db.select().from(chunkEmbeddings).where(eq(chunkEmbeddings.chunkId, chunk.id))).toHaveLength(0);
+  });
+
+  it("defaults test_sets status/questionsTarget and allows a null error", async () => {
+    const [org] = await ctx.db.insert(organizations).values({ name: "ts-org" }).returning();
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: org.id, name: "ts-proj" }).returning();
+    const [set] = await ctx.db.insert(testSets).values({
+      projectId: proj.id, name: "smoke", generatorModel: "mock-generator",
+    }).returning();
+    expect(set.status).toBe("generating");
+    expect(set.error).toBeNull();
+    expect(set.questionsTarget).toBe(30);
+  });
+
+  it("accepts a docsFingerprint on chunk_sets", async () => {
+    const [org] = await ctx.db.insert(organizations).values({ name: "fp-org" }).returning();
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: org.id, name: "fp-proj" }).returning();
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params: { size: 1 }, paramsHash: "fp-hash",
+      docsFingerprint: "abc123",
+    }).returning();
+    expect(set.docsFingerprint).toBe("abc123");
+
+    const [row] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    expect(row.docsFingerprint).toBe("abc123");
   });
 });

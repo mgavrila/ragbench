@@ -108,6 +108,73 @@ describe("chunkHandler", () => {
   });
 });
 
+describe("chunkHandler rebuild-skip", () => {
+  it("skips teardown when nothing changed since the last rebuild, but still chains embed", async () => {
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "skip-proj" }).returning();
+    await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "s1.md", mime: "text/markdown", contentHash: "skip-h1", status: "ready",
+      text: "one two three four five six seven eight",
+    });
+    const params = { maxTokens: 4, overlapTokens: 1 };
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params, paramsHash: hashParams(params),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+    const first = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    expect(first.length).toBeGreaterThan(0);
+    const firstIds = first.map((c) => c.id).sort();
+    const [setRowAfterFirst] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    expect(setRowAfterFirst.docsFingerprint).not.toBeNull();
+
+    sentJobs.length = 0;
+    await chunkHandler(
+      { chunkSetId: set.id, embedModel: "mock-embedding", organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+    );
+
+    const second = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    // No teardown happened: the exact same rows (same IDs) are still there.
+    expect(second.map((c) => c.id).sort()).toEqual(firstIds);
+    // The embed chain still fires on a skipped rebuild.
+    expect(sentJobs).toHaveLength(1);
+    expect(sentJobs[0].name).toBe("embed");
+    expect(sentJobs[0].data).toEqual({ chunkSetId: set.id, model: "mock-embedding", organizationId: orgId });
+  });
+
+  it("rebuilds when a document becomes ready, changing the fingerprint", async () => {
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "skip-proj-2" }).returning();
+    await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "r1.md", mime: "text/markdown", contentHash: "reb-h1", status: "ready",
+      text: "one two three four five six seven eight",
+    });
+    const [pendingDoc] = await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "r2.md", mime: "text/markdown", contentHash: "reb-h2", status: "parsing",
+      text: "nine ten eleven twelve thirteen fourteen",
+    }).returning();
+    const params = { maxTokens: 4, overlapTokens: 1 };
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params, paramsHash: hashParams(params),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+    const first = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    const firstIds = first.map((c) => c.id).sort();
+    const [setRowBefore] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    const fingerprintBefore = setRowBefore.docsFingerprint;
+
+    await ctx.db.update(documents).set({ status: "ready" }).where(eq(documents.id, pendingDoc.id));
+    await chunkHandler({ chunkSetId: set.id }, { db: ctx.db, boss: recordingBoss });
+
+    const second = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, set.id));
+    expect(second.map((c) => c.id).sort()).not.toEqual(firstIds); // teardown happened: fresh row IDs
+    expect(new Set(second.map((c) => c.documentId)).size).toBe(2); // both docs now chunked
+
+    const [setRowAfter] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, set.id));
+    expect(setRowAfter.docsFingerprint).not.toBe(fingerprintBefore);
+  });
+});
+
 describe("embedHandler", () => {
   it("embeds all chunks with the mock model and meters usage", async () => {
     await embedHandler({ chunkSetId: setId, model: "mock-embedding", organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
