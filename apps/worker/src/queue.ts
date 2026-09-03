@@ -1,7 +1,7 @@
 import { PgBoss } from "pg-boss";
 import { createDb, type Db } from "@ragbench/db";
 
-export type JobHandler<T> = (data: T, ctx: { db: Db }) => Promise<void>;
+export type JobHandler<T> = (data: T, ctx: { db: Db; boss: PgBoss }) => Promise<void>;
 
 export async function startWorker(opts: {
   databaseUrl: string;
@@ -22,8 +22,19 @@ export async function startWorker(opts: {
     // fan-out pipeline like evaluate-question enqueuing many jobs -- MUST pass a distinct
     // singletonKey per item (see enqueue() below).
     await boss.createQueue(name, { retryLimit: 3, retryBackoff: true, policy: "exclusive" });
+    // createQueue is INSERT ... ON CONFLICT DO NOTHING, so a queue row created by an earlier
+    // deployment (or by hand) keeps its original policy and the call above succeeds silently.
+    // enqueue()'s dedupe contract depends on "exclusive", so fail loudly instead of running with
+    // a policy that quietly stops rejecting duplicate singletonKeys.
+    const existing = await boss.getQueue(name);
+    if (existing?.policy !== "exclusive") {
+      throw new Error(
+        `queue "${name}" has policy "${existing?.policy ?? "none"}", expected "exclusive"; ` +
+          `pg-boss cannot update an existing queue's policy -- drop it (boss.deleteQueue) and restart`,
+      );
+    }
     await boss.work(name, async ([job]) => {
-      await handler(job.data, { db });
+      await handler(job.data, { db, boss });
     });
   }
 

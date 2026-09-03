@@ -1,6 +1,13 @@
+import { migrateDb } from "@ragbench/db";
 import { startWorker } from "./queue";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+
+// The worker owns schema migration so a fresh database heals itself on boot. It is the one
+// long-lived process guaranteed to run, and boss.start() below already bootstraps pg-boss's own
+// schema the same way -- doing ours here keeps the two in step without a manual `db:migrate`.
+await migrateDb(databaseUrl);
+console.log("ragbench migrations applied");
 
 const { stop } = await startWorker({
   databaseUrl,

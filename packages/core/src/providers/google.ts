@@ -43,21 +43,26 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
-    const res = await this.client.models.embedContent({
-      model: this.model,
-      contents: texts,
-      config: { outputDimensionality: this.dimension },
-    });
-    // The Gemini API does not report a token count for embedContent responses
-    // (only the Gemini Enterprise Agent Platform does, via per-embedding
-    // statistics); default to 0 in that case.
-    await this.report?.({
-      purpose: "embed",
-      provider: "google",
-      model: this.model,
-      inputTokens: 0,
-      outputTokens: 0,
-    });
-    return (res.embeddings ?? []).map((e) => e.values ?? []);
+    const out: number[][] = [];
+    for (let i = 0; i < texts.length; i += 100) {
+      const batch = texts.slice(i, i + 100);
+      const res = await this.client.models.embedContent({
+        model: this.model,
+        contents: batch,
+        config: { outputDimensionality: this.dimension },
+      });
+      // The Gemini API does not report a token count for embedContent responses
+      // (only the Gemini Enterprise Agent Platform does, via per-embedding
+      // statistics); default to 0 in that case.
+      await this.report?.({
+        purpose: "embed",
+        provider: "google",
+        model: this.model,
+        inputTokens: 0,
+        outputTokens: 0,
+      });
+      for (const e of res.embeddings ?? []) out.push(e.values ?? []);
+    }
+    return out;
   }
 }

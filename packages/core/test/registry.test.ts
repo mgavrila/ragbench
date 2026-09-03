@@ -20,6 +20,11 @@ describe("model registry", () => {
     expect(estimateEmbeddingCostUsd("text-embedding-3-small", 1_000_000)).toBeCloseTo(0.02);
   });
 
+  it("prices the mock models at zero", () => {
+    expect(estimateLlmCostUsd("mock-llm", 1_000_000, 1_000_000)).toBe(0);
+    expect(estimateEmbeddingCostUsd("mock-embedding", 1_000_000)).toBe(0);
+  });
+
   it("throws on unknown models", () => {
     expect(() => estimateLlmCostUsd("gpt-nope", 1, 1)).toThrow(/unknown/i);
   });

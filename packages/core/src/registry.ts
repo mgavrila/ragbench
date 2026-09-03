@@ -1,10 +1,11 @@
 export const LLM_MODELS: Record<
   string,
-  { provider: "anthropic" | "google"; inputPerMTok: number; outputPerMTok: number }
+  { provider: "anthropic" | "google" | "mock"; inputPerMTok: number; outputPerMTok: number }
 > = {
   "claude-opus-5": { provider: "anthropic", inputPerMTok: 5, outputPerMTok: 25 },
   "claude-haiku-4-5": { provider: "anthropic", inputPerMTok: 1, outputPerMTok: 5 },
   "gemini-2.5-flash": { provider: "google", inputPerMTok: 0.3, outputPerMTok: 2.5 },
+  "mock-llm": { provider: "mock", inputPerMTok: 0, outputPerMTok: 0 },
 };
 
 export const EMBEDDING_MODELS: Record<
