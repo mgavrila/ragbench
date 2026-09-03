@@ -4,6 +4,18 @@ import { startWorker, enqueue } from "../src/queue";
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 
 describe("worker queue", () => {
+  // Both tests below leave rows behind in the "echo"/"noop" queues: test 1 reaches a terminal
+  // state normally, but test 2 never waits for its "noop" job to finish before stop(). Under the
+  // "exclusive" queue policy (see queue.ts), a leftover created/active row would collide with a
+  // fresh singletonKey send on the NEXT run against this same long-lived container, making
+  // `first` unexpectedly null. Clear both test queues so repeated runs stay deterministic.
+  afterAll(async () => {
+    const { boss, stop } = await startWorker({ databaseUrl: URL, handlers: {} });
+    await boss.deleteAllJobs("echo");
+    await boss.deleteAllJobs("noop");
+    await stop();
+  });
+
   it("processes an enqueued job", async () => {
     const seen: string[] = [];
     const { boss, stop } = await startWorker({
