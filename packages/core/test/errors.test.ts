@@ -36,4 +36,16 @@ describe("provider error taxonomy", () => {
     const orig = new ProviderError("fatal", "anthropic", "nope");
     expect(toProviderError("anthropic", orig)).toBe(orig);
   });
+
+  it("maps a malformed-response parse failure (TypeError, no status) to fatal", () => {
+    // Real providers now wrap the SDK call *and* the response parsing that follows it
+    // (usage reporting, field access) in the same try/catch, rethrowing via
+    // toProviderError. A TypeError thrown while reading an unexpected response shape
+    // has no status/code, so it lands here — this is the taxonomy's side of that contract.
+    const parseErr = new TypeError("Cannot read properties of undefined (reading 'input_tokens')");
+    const pe = toProviderError("anthropic", parseErr);
+    expect(pe.kind).toBe("fatal");
+    expect(pe.retryable).toBe(false);
+    expect(pe.cause).toBe(parseErr);
+  });
 });

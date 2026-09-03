@@ -15,20 +15,19 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     const out: number[][] = [];
     for (let i = 0; i < texts.length; i += 100) {
       const batch = texts.slice(i, i + 100);
-      let res;
       try {
-        res = await this.client.embeddings.create({ model: this.model, input: batch });
+        const res = await this.client.embeddings.create({ model: this.model, input: batch });
+        await this.report?.({
+          purpose: "embed",
+          provider: "openai",
+          model: this.model,
+          inputTokens: res.usage.total_tokens,
+          outputTokens: 0,
+        });
+        for (const d of res.data) out.push(d.embedding);
       } catch (err) {
         throw toProviderError("openai", err);
       }
-      await this.report?.({
-        purpose: "embed",
-        provider: "openai",
-        model: this.model,
-        inputTokens: res.usage.total_tokens,
-        outputTokens: 0,
-      });
-      for (const d of res.data) out.push(d.embedding);
     }
     return out;
   }
