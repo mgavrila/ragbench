@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { documents, documentPath } from "@ragbench/db";
 import type { JobHandler } from "../queue";
 
@@ -18,6 +18,18 @@ function nonPrintableRatio(text: string): number {
     if (code < 0x09 || code === 0xfffd) bad++;
   }
   return bad / text.length;
+}
+
+/**
+ * Shared post-extraction cleanup for both branches. Postgres rejects NUL in text values outright,
+ * so a single stray one -- from either a mislabeled text file or a PDF extraction artifact -- would
+ * fail the ready-update below and put the document into a retry loop it can never leave. The
+ * printability check only applies to the text branch: a PDF is already known to be a real PDF by
+ * its magic bytes, so its extracted text isn't screened for looking like binary mojibake.
+ */
+export function sanitizeExtractedText(text: string, { checkPrintable }: { checkPrintable: boolean }): string {
+  if (checkPrintable && nonPrintableRatio(text) > 0.1) throw new Error("file does not appear to be text");
+  return text.replaceAll("\u0000", "");
 }
 
 export const parseHandler: JobHandler<{ documentId: string }> = async ({ documentId }, { db }) => {
@@ -41,13 +53,10 @@ export const parseHandler: JobHandler<{ documentId: string }> = async ({ documen
       // documents without a proper xref table) — extraction errors still throw and are handled below.
       const pdf = await getDocumentProxy(new Uint8Array(raw), { verbosity: 0 });
       const extracted = await extractText(pdf, { mergePages: true });
-      text = extracted.text;
+      text = sanitizeExtractedText(extracted.text, { checkPrintable: false });
     } else {
       const decoded = raw.toString("utf-8");
-      if (nonPrintableRatio(decoded) > 0.1) throw new Error("file does not appear to be text");
-      // Postgres rejects NUL in text values outright, so a single stray one would fail the
-      // ready-update below and put the document into a retry loop it can never leave.
-      text = decoded.replaceAll("\u0000", "");
+      text = sanitizeExtractedText(decoded, { checkPrintable: true });
     }
     contentHash = createHash("sha256").update(raw).digest("hex");
   } catch (err) {
@@ -57,7 +66,23 @@ export const parseHandler: JobHandler<{ documentId: string }> = async ({ documen
     return;
   }
 
-  await db.update(documents)
-    .set({ text, contentHash, status: "ready", error: null })
-    .where(eq(documents.id, documentId));
+  // Duplicate detection and the ready-update both run outside the extraction try above, same as
+  // that block's own failure-attribution discipline requires: a DB error here must propagate and
+  // retry the job rather than being mislabeled as a bad file.
+  const [existingReady] = await db.select().from(documents).where(and(
+    eq(documents.projectId, doc.projectId),
+    eq(documents.contentHash, contentHash),
+    eq(documents.status, "ready"),
+    ne(documents.id, documentId),
+  ));
+
+  if (existingReady) {
+    await db.update(documents)
+      .set({ text, contentHash, status: "duplicate", error: `duplicate of ${existingReady.filename}` })
+      .where(eq(documents.id, documentId));
+  } else {
+    await db.update(documents)
+      .set({ text, contentHash, status: "ready", error: null })
+      .where(eq(documents.id, documentId));
+  }
 };

@@ -27,6 +27,7 @@ const STATUS_COLOR: Record<string, string> = {
   ready: "#1a7f37",
   parsing: "#9a6700",
   failed: "#cf222e",
+  duplicate: "#57606a",
 };
 
 const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };

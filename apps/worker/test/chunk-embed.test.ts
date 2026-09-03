@@ -65,6 +65,33 @@ describe("chunkHandler", () => {
     expect(sentJobs).toEqual([]);
   });
 
+  it("batches inserts for a document producing more than 5,000 chunks, all inside one transaction", async () => {
+    // Own project: a chunk set chunks every ready document in its project, so this document must
+    // not share the outer describe block's project (with "a.md") or its chunks would be mixed in
+    // and the exact-count assertion below would be wrong.
+    // 65,535 bind-param cap / 6 params per chunk row means a single INSERT statement tops out
+    // around 10,922 rows; batching at 5,000 keeps a comfortable margin and forces at least three
+    // batches for this document.
+    const [bigProject] = await ctx.db.insert(projects).values({ organizationId: orgId, name: "big-proj" }).returning();
+    const wordCount = 12_000;
+    const bigText = Array.from({ length: wordCount }, (_, i) => `w${i}`).join(" ");
+    await ctx.db.insert(documents).values({
+      projectId: bigProject.id, filename: "big.md", mime: "text/markdown", contentHash: "h-big", status: "ready",
+      text: bigText,
+    });
+    const bigParams = { maxTokens: 1, overlapTokens: 0 };
+    const [bigSet] = await ctx.db.insert(chunkSets).values({
+      projectId: bigProject.id, chunker: "fixed", params: bigParams, paramsHash: hashParams(bigParams),
+    }).returning();
+
+    await chunkHandler({ chunkSetId: bigSet.id }, { db: ctx.db, boss: recordingBoss });
+
+    const rows = await ctx.db.select().from(chunks).where(eq(chunks.chunkSetId, bigSet.id));
+    expect(rows.length).toBe(wordCount);
+    const idxs = rows.map((r) => r.idx).sort((a, b) => a - b);
+    expect(idxs).toEqual(Array.from({ length: wordCount }, (_, i) => i));
+  });
+
   it("chains the embed job after the rebuild has committed", async () => {
     sentJobs.length = 0;
     await chunkHandler(

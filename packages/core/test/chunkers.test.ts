@@ -65,6 +65,18 @@ describe("chunkHeading", () => {
       expect(out.length).toBeGreaterThan(0);
     }
   });
+  // An out-of-range maxChars (0, negative, non-numeric) used to clamp to the 1-char minimum,
+  // flooding the output with thousands of single-character chunks. It must fall back to the
+  // default size instead.
+  it("falls back to the default size for out-of-range maxChars instead of flooding 1-char chunks", { timeout: 2000 }, () => {
+    const big = "no headings " + "x".repeat(10_000);
+    for (const maxChars of [0, -10, "abc", null]) {
+      const out = chunkHeading(big, { maxChars });
+      assertInvariants(big, out);
+      expect(out.length).toBeLessThan(10); // default (4000) yields a handful of chunks, not thousands
+      for (const c of out) expect(c.text.length).toBeLessThanOrEqual(4000);
+    }
+  });
 });
 
 describe("chunkSentenceWindow", () => {

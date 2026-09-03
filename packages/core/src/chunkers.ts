@@ -18,11 +18,13 @@ function slice(text: string, start: number, end: number): Chunk {
 
 // Params reach these functions from user-supplied JSON. A window size of 0 or a negative overlap
 // would make the loops below never advance (or advance backwards), so every size is normalized to
-// a usable integer here rather than trusting the caller: non-numbers fall back to the default,
-// fractions floor, and anything under `min` is raised to it.
+// a usable integer here rather than trusting the caller: fractions floor, and non-numbers or
+// anything under `min` fall back to the default rather than being clamped up to `min` -- clamping
+// a maxChars:0 up to 1 used to flood the output with thousands of 1-char chunks instead of the
+// sane default-sized ones a caller almost certainly wanted.
 function size(value: unknown, fallback: number, min: number): number {
-  const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
-  return Math.max(min, n);
+  const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
+  return Number.isFinite(n) && n >= min ? n : fallback;
 }
 
 /** Overlap must leave the window at least one unit of forward progress per step. */

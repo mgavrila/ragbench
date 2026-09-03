@@ -3,6 +3,11 @@ import { chunkSets, chunks, documents } from "@ragbench/db";
 import { CHUNKERS } from "@ragbench/core";
 import { enqueue, type JobHandler } from "../queue";
 
+// Postgres caps a single statement at 65,535 bind parameters. Each chunk row binds 6 (chunkSetId,
+// documentId, idx, text, startOffset, endOffset), so one statement tops out around 10,922 rows;
+// 5,000 keeps a comfortable margin below that.
+const INSERT_BATCH_SIZE = 5000;
+
 export const chunkHandler: JobHandler<{
   chunkSetId: string;
   embedModel?: string;
@@ -24,10 +29,13 @@ export const chunkHandler: JobHandler<{
       if (!doc.text) continue;
       const pieces = chunker(doc.text, set.params);
       if (pieces.length === 0) continue;
-      await tx.insert(chunks).values(pieces.map((p, idx) => ({
-        chunkSetId, documentId: doc.id, idx,
-        text: p.text, startOffset: p.startOffset, endOffset: p.endOffset,
-      })));
+      for (let i = 0; i < pieces.length; i += INSERT_BATCH_SIZE) {
+        const batch = pieces.slice(i, i + INSERT_BATCH_SIZE);
+        await tx.insert(chunks).values(batch.map((p, j) => ({
+          chunkSetId, documentId: doc.id, idx: i + j,
+          text: p.text, startOffset: p.startOffset, endOffset: p.endOffset,
+        })));
+      }
     }
   });
 
