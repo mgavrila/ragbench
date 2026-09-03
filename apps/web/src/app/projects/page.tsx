@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { projects } from "@ragbench/db";
 import { getDb } from "@/lib/db";
@@ -23,7 +24,7 @@ export default async function ProjectsPage() {
   return (
     <div>
       <h1>Projects</h1>
-      <ul>{rows.map((p) => <li key={p.id}>{p.name}</li>)}</ul>
+      <ul>{rows.map((p) => <li key={p.id}><Link href={`/projects/${p.id}`}>{p.name}</Link></li>)}</ul>
       <form action={create}>
         <input name="name" placeholder="New project name" required />
         <button type="submit">Create</button>
