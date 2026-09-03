@@ -1,0 +1,12 @@
+{
+  "name": "ragbench",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* dev",
+    "build": "pnpm -r build",
+    "db:migrate": "pnpm --filter @ragbench/db migrate",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": { "node": ">=22" }
+}
