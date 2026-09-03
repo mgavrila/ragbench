@@ -16,9 +16,23 @@ function slice(text: string, start: number, end: number): Chunk {
   return { text: text.slice(start, end), startOffset: start, endOffset: end };
 }
 
-export function chunkFixed(text: string, params: { maxTokens?: number; overlapTokens?: number }): Chunk[] {
-  const maxTokens = params.maxTokens ?? 200;
-  const overlap = Math.min(params.overlapTokens ?? 40, maxTokens - 1);
+// Params reach these functions from user-supplied JSON. A window size of 0 or a negative overlap
+// would make the loops below never advance (or advance backwards), so every size is normalized to
+// a usable integer here rather than trusting the caller: non-numbers fall back to the default,
+// fractions floor, and anything under `min` is raised to it.
+function size(value: unknown, fallback: number, min: number): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.max(min, n);
+}
+
+/** Overlap must leave the window at least one unit of forward progress per step. */
+function overlapSize(value: unknown, fallback: number, window: number): number {
+  return Math.min(size(value, fallback, 0), window - 1);
+}
+
+export function chunkFixed(text: string, params: { maxTokens?: unknown; overlapTokens?: unknown }): Chunk[] {
+  const maxTokens = size(params.maxTokens, 200, 1);
+  const overlap = overlapSize(params.overlapTokens, 40, maxTokens);
   const spans = tokenSpans(text);
   if (spans.length === 0) return [];
   const out: Chunk[] = [];
@@ -32,8 +46,8 @@ export function chunkFixed(text: string, params: { maxTokens?: number; overlapTo
   return out;
 }
 
-export function chunkHeading(text: string, params: { maxChars?: number }): Chunk[] {
-  const maxChars = params.maxChars ?? 4000;
+export function chunkHeading(text: string, params: { maxChars?: unknown }): Chunk[] {
+  const maxChars = size(params.maxChars, 4000, 1);
   if (text.trim().length === 0) return [];
   const starts = [0];
   const re = /^#{1,6} /gm;
@@ -64,10 +78,10 @@ function sentenceSpans(text: string): Span[] {
 
 export function chunkSentenceWindow(
   text: string,
-  params: { windowSentences?: number; overlapSentences?: number },
+  params: { windowSentences?: unknown; overlapSentences?: unknown },
 ): Chunk[] {
-  const win = params.windowSentences ?? 5;
-  const overlap = Math.min(params.overlapSentences ?? 1, win - 1);
+  const win = size(params.windowSentences, 5, 1);
+  const overlap = overlapSize(params.overlapSentences, 1, win);
   const spans = sentenceSpans(text);
   if (spans.length === 0) return [];
   const out: Chunk[] = [];
@@ -82,12 +96,22 @@ export function chunkSentenceWindow(
 }
 
 export const CHUNKERS: Record<string, (text: string, params: Record<string, unknown>) => Chunk[]> = {
-  fixed: (t, p) => chunkFixed(t, p as { maxTokens?: number; overlapTokens?: number }),
-  heading: (t, p) => chunkHeading(t, p as { maxChars?: number }),
-  "sentence-window": (t, p) => chunkSentenceWindow(t, p as { windowSentences?: number; overlapSentences?: number }),
+  fixed: (t, p) => chunkFixed(t, p),
+  heading: (t, p) => chunkHeading(t, p),
+  "sentence-window": (t, p) => chunkSentenceWindow(t, p),
 };
 
+/** JSON with object keys sorted at every depth, so equal params hash equally whatever their key order. */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  const body = Object.keys(obj).sort()
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+    .join(",");
+  return `{${body}}`;
+}
+
 export function hashParams(params: Record<string, unknown>): string {
-  const stable = JSON.stringify(params, Object.keys(params).sort());
-  return createHash("sha256").update(stable).digest("hex");
+  return createHash("sha256").update(stableStringify(params)).digest("hex");
 }

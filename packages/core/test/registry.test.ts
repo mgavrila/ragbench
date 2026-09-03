@@ -3,6 +3,7 @@ import {
   LLM_MODELS, EMBEDDING_MODELS, DEFAULT_LLM, DEFAULT_EMBEDDER,
   estimateLlmCostUsd, estimateEmbeddingCostUsd,
 } from "../src/registry";
+import { makeEmbedder, makeLLM } from "../src/providers/factory";
 
 describe("model registry", () => {
   it("has the default models", () => {
@@ -27,5 +28,14 @@ describe("model registry", () => {
 
   it("throws on unknown models", () => {
     expect(() => estimateLlmCostUsd("gpt-nope", 1, 1)).toThrow(/unknown/i);
+  });
+
+  it("does not resolve inherited Object keys as models", () => {
+    for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(() => estimateEmbeddingCostUsd(key, 1)).toThrow(/unknown/i);
+      expect(() => estimateLlmCostUsd(key, 1, 1)).toThrow(/unknown/i);
+      expect(() => makeEmbedder(key)).toThrow(/unknown/i);
+      expect(() => makeLLM(key)).toThrow(/unknown/i);
+    }
   });
 });

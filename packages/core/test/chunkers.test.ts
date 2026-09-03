@@ -26,6 +26,22 @@ describe("chunkFixed", () => {
     expect(chunkFixed("", {})).toEqual([]);
     expect(chunkFixed("   \n  ", {})).toEqual([]);
   });
+  // A window of 0 (or a negative/fractional one) used to leave the loop unable to advance, so a
+  // request body of {"maxTokens": 0} hung the worker. Every bad value must normalize instead.
+  it("normalizes hostile window params instead of hanging", { timeout: 2000 }, () => {
+    for (const maxTokens of [0, -1, 2.5, "abc", null, Number.NaN, Infinity]) {
+      const out = chunkFixed(WORDS, { maxTokens, overlapTokens: 1 });
+      assertInvariants(WORDS, out);
+      expect(out.length).toBeGreaterThan(0);
+    }
+  });
+  it("clamps overlap below the window so chunks always advance", { timeout: 2000 }, () => {
+    for (const overlapTokens of [5, -3, 1000, "abc"]) {
+      const out = chunkFixed(WORDS, { maxTokens: 5, overlapTokens });
+      assertInvariants(WORDS, out);
+      expect(out.at(-1)!.endOffset).toBe(WORDS.length);
+    }
+  });
 });
 
 describe("chunkHeading", () => {
@@ -42,6 +58,13 @@ describe("chunkHeading", () => {
     expect(out.length).toBeGreaterThan(2);
     for (const c of out) expect(c.text.length).toBeLessThanOrEqual(3000);
   });
+  it("returns promptly for a zero or non-numeric maxChars", { timeout: 2000 }, () => {
+    for (const maxChars of [0, -10, 1.5, "abc", null]) {
+      const out = chunkHeading("# t\nbody", { maxChars });
+      assertInvariants("# t\nbody", out);
+      expect(out.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("chunkSentenceWindow", () => {
@@ -55,6 +78,14 @@ describe("chunkSentenceWindow", () => {
     const uni = "Émile écrit. Ça marche bien! Encore ça? Fin.";
     assertInvariants(uni, chunkSentenceWindow(uni, { windowSentences: 2, overlapSentences: 0 }));
   });
+  it("normalizes hostile window params instead of hanging", { timeout: 2000 }, () => {
+    for (const windowSentences of [0, -1, 1.5, "abc", null]) {
+      const out = chunkSentenceWindow(PROSE, { windowSentences, overlapSentences: 3 });
+      assertInvariants(PROSE, out);
+      expect(out.length).toBeGreaterThan(0);
+      expect(out.at(-1)!.endOffset).toBe(PROSE.length);
+    }
+  });
 });
 
 describe("registry + params hash", () => {
@@ -64,5 +95,12 @@ describe("registry + params hash", () => {
   it("hashParams is stable across key order and distinct across values", () => {
     expect(hashParams({ a: 1, b: 2 })).toBe(hashParams({ b: 2, a: 1 }));
     expect(hashParams({ a: 1 })).not.toBe(hashParams({ a: 2 }));
+  });
+  it("hashParams distinguishes nested values and sorts nested keys", () => {
+    // A key-list replacer applies at every depth, which erased nested keys entirely and collapsed
+    // every distinct nested object onto the same hash.
+    expect(hashParams({ a: { b: 1 } })).not.toBe(hashParams({ a: { c: 2 } }));
+    expect(hashParams({ a: { b: 1, c: 2 } })).toBe(hashParams({ a: { c: 2, b: 1 } }));
+    expect(hashParams({ a: [1, 2] })).not.toBe(hashParams({ a: [2, 1] }));
   });
 });
