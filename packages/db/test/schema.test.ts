@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { eq } from "drizzle-orm";
 import { createDb, migrateDb } from "../src/client";
 import { organizations, projects, chunkEmbeddings, chunkSets, chunks, documents } from "../src/schema";
 
@@ -37,8 +38,9 @@ describe("schema", () => {
     await ctx.db.insert(chunkEmbeddings).values({
       chunkId: chunk.id, model: "mock-embedding", dimension: 3, embedding: emb,
     });
-    const rows = await ctx.db.select().from(chunkEmbeddings);
-    expect(rows.at(-1)!.embedding).toHaveLength(3);
-    expect(rows.at(-1)!.embedding[0]).toBeCloseTo(0.1);
+    const [row] = await ctx.db.select().from(chunkEmbeddings)
+      .where(eq(chunkEmbeddings.chunkId, chunk.id));
+    expect(row.embedding).toHaveLength(3);
+    expect(row.embedding[0]).toBeCloseTo(0.1);
   });
 });
