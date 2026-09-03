@@ -93,10 +93,8 @@ export function samplePassages(
   return out;
 }
 
-/** Extracts the first JSON array literal from raw text, tolerating code fences and prose around it. */
-function extractFirstJsonArray(raw: string): unknown[] | null {
-  const start = raw.indexOf("[");
-  if (start === -1) return null;
+/** Parses the balanced `[...]` array starting exactly at `start` in raw text, or null if unbalanced/invalid JSON. */
+function matchJsonArrayAt(raw: string, start: number): unknown[] | null {
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -126,9 +124,7 @@ function extractFirstJsonArray(raw: string): unknown[] | null {
   return null;
 }
 
-export function parseQaJson(raw: string): Array<{ question: string; answer: string; quote: string }> {
-  const arr = extractFirstJsonArray(raw);
-  if (!arr) return [];
+function filterQaEntries(arr: unknown[]): Array<{ question: string; answer: string; quote: string }> {
   const out: Array<{ question: string; answer: string; quote: string }> = [];
   for (const entry of arr) {
     if (entry === null || typeof entry !== "object") continue;
@@ -138,4 +134,22 @@ export function parseQaJson(raw: string): Array<{ question: string; answer: stri
     }
   }
   return out;
+}
+
+/**
+ * Extracts a QA array from raw LLM output, tolerating code fences and surrounding prose. Tries
+ * every `[` in order as a candidate array start (an incidental bracket earlier in the prose, e.g.
+ * `data[0]`, parses as valid but unrelated JSON) and accepts the first candidate that yields at
+ * least one entry with all three required string fields, rather than stopping at whichever `[`
+ * comes first in the text.
+ */
+export function parseQaJson(raw: string): Array<{ question: string; answer: string; quote: string }> {
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== "[") continue;
+    const arr = matchJsonArrayAt(raw, i);
+    if (!arr) continue;
+    const filtered = filterQaEntries(arr);
+    if (filtered.length > 0) return filtered;
+  }
+  return [];
 }

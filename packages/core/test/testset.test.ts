@@ -144,4 +144,19 @@ describe("parseQaJson", () => {
       { question: "Q6", answer: "A6", quote: "C6" },
     ]);
   });
+
+  it("skips an unrelated earlier bracket and finds the real QA array", () => {
+    const raw = 'The value at data[0] is interesting. Anyway: [{"question":"Q","answer":"A","quote":"C"}]';
+    expect(parseQaJson(raw)).toEqual([{ question: "Q", answer: "A", quote: "C" }]);
+  });
+
+  it("skips a numeric-array bracket in prose before the real array", () => {
+    const raw = 'See item[1,2,3] for context, then: [{"question":"Q","answer":"A","quote":"C"}]';
+    expect(parseQaJson(raw)).toEqual([{ question: "Q", answer: "A", quote: "C" }]);
+  });
+
+  it("returns [] when prose brackets exist but no valid QA array is present anywhere", () => {
+    const raw = "The value at data[0] and item[1,2,3] are both just noise here.";
+    expect(parseQaJson(raw)).toEqual([]);
+  });
 });
