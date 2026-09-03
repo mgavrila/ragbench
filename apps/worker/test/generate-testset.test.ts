@@ -5,7 +5,7 @@ import {
 } from "@ragbench/db";
 import { ProviderError, normalizeWs, samplePassages, type LLMProvider } from "@ragbench/core";
 import {
-  generateTestsetHandler, passesTrivialityGate, roundRobinPassages,
+  describeGeneration, generateTestsetHandler, passesTrivialityGate, roundRobinPassages,
 } from "../src/handlers/generate-testset";
 
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
@@ -114,6 +114,30 @@ describe("roundRobinPassages", () => {
   });
 });
 
+describe("describeGeneration", () => {
+  const noDrops = { verificationFailed: 0, answerNotInQuote: 0, gateTrivial: 0, parseEmpty: 0 };
+
+  it("reports the count alone when nothing was dropped", () => {
+    expect(describeGeneration(6, 6, noDrops)).toBe("generated 6 of 6");
+  });
+
+  it("names every reason a candidate was dropped", () => {
+    const text = describeGeneration(0, 10, {
+      verificationFailed: 4, answerNotInQuote: 3, gateTrivial: 2, parseEmpty: 1,
+    });
+
+    expect(text).toBe(
+      "generated 0 of 10: 4 quotes failed verification, 3 answers were not inside their quote, "
+      + "2 questions were dropped as trivial, 1 passage produced no candidates",
+    );
+  });
+
+  it("lists only the reasons that actually fired", () => {
+    expect(describeGeneration(1, 4, { ...noDrops, verificationFailed: 1 }))
+      .toBe("generated 1 of 4: 1 quote failed verification");
+  });
+});
+
 describe("passesTrivialityGate", () => {
   // The gate is the one provider path with no keyless integration coverage, so it is exercised
   // directly through a stub rather than through the handler.
@@ -179,6 +203,10 @@ describe("generateTestsetHandler", () => {
       expect(row.goldStart).toBeGreaterThanOrEqual(0);
       expect(row.goldEnd).toBeGreaterThan(row.goldStart);
       expect(row.goldEnd).toBeLessThanOrEqual(docText.length);
+      // Span-equals-answer is a property of the DEMO generator, which quotes the whole sentence it
+      // answers with (answer === quote), and the span is cut from the quote. Production only
+      // guarantees the weaker containment the handler enforces -- the answer sits inside the quote
+      // the span points at -- so do not read this line as a promise about real generator output.
       expect(normalizeWs(docText.slice(row.goldStart, row.goldEnd))).toBe(normalizeWs(row.goldAnswer));
       expect(row.question.length).toBeGreaterThan(0);
       // Well-formedness: a gold answer starts where a sentence starts. Passages are cut on word
@@ -188,9 +216,19 @@ describe("generateTestsetHandler", () => {
       expect(preceding === "" || /[.!?]$/.test(preceding)).toBe(true);
     }
 
-    // The demo generator never calls a provider, so generation bills nothing for this set.
+    // The demo generator calls no provider, but it still meters: a demo run has to appear in the
+    // usage view (with a zero cost) rather than leaving the org unable to tell "nothing ran" from
+    // "nothing was recorded". The gate is skipped in demo mode, so it never bills.
     const usage = await ctx.db.select().from(usageLog).where(eq(usageLog.organizationId, orgId));
-    expect(usage.filter((u) => u.purpose === "testset" || u.purpose === "testset-gate")).toHaveLength(0);
+    const metered = usage.filter((u) => u.purpose === "testset");
+    expect(metered.length).toBeGreaterThan(0);
+    for (const u of metered) {
+      expect(u.provider).toBe("mock");
+      expect(u.model).toBe("mock-llm");
+      expect(u.costUsd).toBe(0);
+      expect(u.inputTokens).toBeGreaterThan(0);
+    }
+    expect(usage.filter((u) => u.purpose === "testset-gate")).toHaveLength(0);
   });
 
   it("is a no-op on retry once the set is ready", async () => {
@@ -337,6 +375,46 @@ describe("generateTestsetHandler", () => {
     expect(set.status).toBe("failed");
     expect(set.error).toBeTruthy(); // the provider's own message, not asserted verbatim
     expect(await activeQuestions(testSetId)).toHaveLength(0);
+  });
+
+  it("marks a set that kept nothing ready, with the drop reasons on the row", async () => {
+    // Sentences long enough for the demo generator (30+ chars) but almost entirely whitespace, so
+    // every quote it proposes normalizes below verifyQuote's 12-char floor and is dropped. The run
+    // is a complete, non-retryable one that produced no ground truth: it must not sit in
+    // "generating", and it must not go ready with nothing to explain the empty set.
+    const sentence = `Ab${" ".repeat(40)}cd.`;
+    const projectId = await seedProject("gts-nokeep", [Array(40).fill(sentence).join(" ")]);
+    const testSetId = await makeSet(projectId, 6);
+
+    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+
+    const set = await loadSet(testSetId);
+    expect(set.status).toBe("ready");
+    expect(await activeQuestions(testSetId)).toHaveLength(0);
+    expect(set.error).toContain("generated 0 of 6");
+    expect(set.error).toMatch(/\d+ quotes? failed verification/);
+  });
+
+  it("does not resurrect a question the reviewer deleted", async () => {
+    const projectId = await seedProject("gts-deleted", [longText("mu"), longText("nu")]);
+    const testSetId = await makeSet(projectId, 6);
+
+    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+    const generated = await activeQuestions(testSetId);
+    expect(generated.length).toBeGreaterThan(0);
+
+    // Review rejects every question, and the set is re-run (a deletion drops the active count back
+    // below target, so the resume has room to generate again). The demo generator is deterministic,
+    // so the re-walk proposes exactly the rejected questions -- which must stay rejected.
+    await ctx.db.update(testQuestions).set({ status: "deleted" })
+      .where(eq(testQuestions.testSetId, testSetId));
+    await ctx.db.update(testSets).set({ status: "generating" }).where(eq(testSets.id, testSetId));
+    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+
+    const rejected = new Set(generated.map((r) => `${r.documentId}:${r.question}`));
+    const after = await activeQuestions(testSetId);
+    expect(after.filter((r) => rejected.has(`${r.documentId}:${r.question}`))).toHaveLength(0);
+    expect((await loadSet(testSetId)).status).toBe("ready");
   });
 
   it("resolves without throwing when the test set is gone", async () => {

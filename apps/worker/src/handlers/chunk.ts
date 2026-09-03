@@ -14,7 +14,7 @@ const INSERT_BATCH_SIZE = 5000;
 // content (via their contentHashes, sorted so document order doesn't matter). A doc flipping to
 // "ready" or "duplicate"/"failed" changes which contentHashes are in the join, so it changes the
 // fingerprint and forces a rebuild.
-function computeFingerprint(paramsHash: string, readyDocs: { contentHash: string }[]): string {
+export function computeFingerprint(paramsHash: string, readyDocs: { contentHash: string }[]): string {
   const sortedHashes = readyDocs.map((d) => d.contentHash).sort().join(",");
   return createHash("sha256").update(`${paramsHash}:${sortedHashes}`).digest("hex");
 }

@@ -53,7 +53,7 @@ export const documents = pgTable("documents", {
   mime: text("mime").notNull(),
   contentHash: text("content_hash").notNull(),
   text: text("text"),
-  status: text("status").notNull().default("parsing"), // parsing | ready | failed
+  status: text("status").notNull().default("parsing"), // parsing | ready | duplicate | failed
   error: text("error"),
   createdAt: createdAt(),
 }, (t) => [index("documents_project_idx").on(t.projectId)]);

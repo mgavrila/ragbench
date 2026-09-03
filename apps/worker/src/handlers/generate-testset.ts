@@ -15,6 +15,37 @@ const GATE_MAX_TOKENS = 64;
 type Passage = { text: string; start: number; end: number };
 type Doc = { id: string; text: string };
 
+/**
+ * Why each candidate the generator produced did not become a question. Every drop is silent on its
+ * own -- a set that comes back with three questions out of thirty looks the same as one that came
+ * back short because the corpus ran out of passages -- so they are counted and reported.
+ */
+type DropCounts = {
+  verificationFailed: number;
+  answerNotInQuote: number;
+  gateTrivial: number;
+  parseEmpty: number;
+};
+
+/** Human-readable account of a generation run, for the worker log and (when nothing was kept) the set's `error`. */
+export function describeGeneration(kept: number, wanted: number, drops: DropCounts): string {
+  const reasons = [
+    [drops.verificationFailed, "quote failed verification", "quotes failed verification"],
+    [drops.answerNotInQuote, "answer was not inside its quote", "answers were not inside their quote"],
+    [drops.gateTrivial, "question was dropped as trivial", "questions were dropped as trivial"],
+    [drops.parseEmpty, "passage produced no candidates", "passages produced no candidates"],
+  ] as const;
+  const parts = reasons
+    .filter(([n]) => n > 0)
+    .map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+  return `generated ${kept} of ${wanted}${parts.length > 0 ? `: ${parts.join(", ")}` : ""}`;
+}
+
+/** Whitespace-token stand-in for a real tokenizer, matching what the mock provider reports. */
+function estimateTokens(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
 /** A question is the same question only within the same document: two documents that share a
  * sentence should each get their own question and their own gold span. */
 function questionKey(documentId: string, question: string): string {
@@ -109,15 +140,20 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
     }
 
     // Resume: a retry after a crash mid-generation counts what already landed towards the target
-    // and generates only the remainder, so questions never pile past `questionsTarget`. Questions
-    // deleted during review are excluded, which lets the count reflect what the user actually kept.
-    const existing = await db.select({
+    // and generates only the remainder, so questions never pile past `questionsTarget`. Deleted
+    // questions are read too but counted separately below: they do not fill the target (the count
+    // reflects what the user actually kept) yet they still block their own regeneration.
+    const stored = await db.select({
       documentId: testQuestions.documentId,
       question: testQuestions.question,
       goldStart: testQuestions.goldStart,
-    }).from(testQuestions)
-      .where(and(eq(testQuestions.testSetId, testSetId), eq(testQuestions.status, "active")));
+      status: testQuestions.status,
+    }).from(testQuestions).where(eq(testQuestions.testSetId, testSetId));
+    const existing = stored.filter((q) => q.status === "active");
     const wanted = set.questionsTarget - existing.length;
+    // Non-null only when a run generated nothing: cleared on every other path so a set that
+    // recovers on a retry does not keep an explanation for a shortfall it no longer has.
+    let advisory: string | null = null;
 
     if (wanted > 0) {
       // Two pieces of resume bookkeeping, both derived from what is already stored.
@@ -127,20 +163,30 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
       // first attempt never reached. (A quote that also occurs earlier in the document resolves to
       // that earlier span, which can mark the wrong passage covered -- the cost is skipping one
       // passage, and the alternative is storing passage provenance we have no other use for.)
-      const asked = new Set(existing.map((q) => questionKey(q.documentId, q.question)));
+      // `asked` spans deleted questions too: a reviewer deleting a question is rejecting it, and a
+      // resume that re-walks the passage must not put it back. Only the target count and the
+      // covered-passage map read the active rows, since both describe what the set currently holds.
+      const asked = new Set(stored.map((q) => questionKey(q.documentId, q.question)));
       const coveredStarts = new Map<string, number[]>();
       for (const q of existing) {
         coveredStarts.set(q.documentId, [...(coveredStarts.get(q.documentId) ?? []), q.goldStart]);
       }
       const isMock = modelEntry.provider === "mock";
       const reporter = makeUsageReporter(db, organizationId);
-      // Demo mode is a pure function over the passage: no provider, no key, no spend -- which is
-      // also why the triviality gate (a second, billed call per candidate) is skipped for it.
-      const generator: LLMProvider | null = isMock ? null : makeLLM(set.generatorModel, reporter, "testset");
-      const gate: LLMProvider | null = isMock ? null : makeLLM(CHEAP_LLM, reporter, "testset-gate");
 
       let kept = 0;
+      const drops: DropCounts = {
+        verificationFailed: 0, answerNotInQuote: 0, gateTrivial: 0, parseEmpty: 0,
+      };
       try {
+        // Constructed inside the try so a provider SDK that throws from its constructor (a
+        // malformed key, an unsupported option) is attributed to the set like any other
+        // non-retryable provider failure, instead of escaping as an unhandled job error.
+        // Demo mode is a pure function over the passage: no provider, no key, no spend -- which is
+        // also why the triviality gate (a second, billed call per candidate) is skipped for it.
+        const generator: LLMProvider | null = isMock ? null : makeLLM(set.generatorModel, reporter, "testset");
+        const gate: LLMProvider | null = isMock ? null : makeLLM(CHEAP_LLM, reporter, "testset-gate");
+
         for (const { doc, passage } of roundRobinPassages(docs, set.questionsTarget)) {
           if (kept >= wanted) break;
           const covered = coveredStarts.get(doc.id)
@@ -152,6 +198,19 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
                 prompt: buildGenerationPrompt(passage.text, 1), maxTokens: GENERATION_MAX_TOKENS,
               }))
             : mockGenerateQa(passage, 1);
+          if (candidates.length === 0) drops.parseEmpty++;
+          // The demo generator spends nothing, but a demo run still has to show up in the usage
+          // view -- an org that only ever ran demo sets would otherwise see an empty ledger and no
+          // way to tell "nothing ran" from "nothing was recorded". Synthetic counts, zero cost.
+          if (isMock) {
+            await reporter({
+              purpose: "testset", provider: modelEntry.provider, model: set.generatorModel,
+              inputTokens: estimateTokens(passage.text),
+              outputTokens: candidates.reduce(
+                (n, c) => n + estimateTokens(`${c.question} ${c.answer} ${c.quote}`), 0,
+              ),
+            });
+          }
 
           for (const candidate of candidates) {
             if (kept >= wanted) break;
@@ -160,13 +219,24 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
             // stored with a made-up answer. The span is resolved against the whole document (not
             // the passage) because that is the coordinate system the evaluator scores against.
             const span = verifyQuote(doc.text, candidate.quote);
-            if (!span) continue;
+            if (!span) { drops.verificationFailed++; continue; }
+            // The span above only proves the QUOTE is in the document; the stored gold answer is
+            // the model's `answer`, which the prompt requires to sit inside that quote. Without
+            // this check a model that answers alongside its quote instead of from within it stores
+            // an answer the span does not contain -- ground truth that contradicts its own offsets.
+            if (!normalizeWs(candidate.quote).includes(normalizeWs(candidate.answer))) {
+              drops.answerNotInQuote++;
+              continue;
+            }
             const key = questionKey(doc.id, candidate.question);
             if (asked.has(key)) continue;
 
             // Gate failures never reach the catch below: passesTrivialityGate owns them and keeps
             // the question, so only the generator call can fail or retry the set.
-            if (gate && !(await passesTrivialityGate(gate, candidate.question, candidate.quote))) continue;
+            if (gate && !(await passesTrivialityGate(gate, candidate.question, candidate.quote))) {
+              drops.gateTrivial++;
+              continue;
+            }
 
             // Inserted one at a time, as they are verified: this is what a retry resumes from.
             await db.insert(testQuestions).values({
@@ -194,11 +264,19 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
         }
         throw err;
       }
+
+      const summary = describeGeneration(kept, wanted, drops);
+      console.log(`generate-testset ${testSetId}: ${summary}`);
+      // A run that kept nothing is still a finished run, not a failure: the documents were read,
+      // the generator answered, and every candidate was rejected for a reason worth surfacing. The
+      // set goes ready (there is nothing to retry) with the reasons in `error`, which the UI shows
+      // beside the status -- otherwise the user sees "ready, 0 questions" and no explanation.
+      if (kept === 0) advisory = summary;
     }
 
     // Ready even when short of the target -- passages or verifiable quotes can simply run out, and
     // the UI reports the actual count. A DB failure here is NOT caught: it is transient, so the job
     // retries and the resume path above re-counts and finishes the set rather than marking it
     // failed over a blip.
-    await db.update(testSets).set({ status: "ready", error: null }).where(eq(testSets.id, testSetId));
+    await db.update(testSets).set({ status: "ready", error: advisory }).where(eq(testSets.id, testSetId));
   };
