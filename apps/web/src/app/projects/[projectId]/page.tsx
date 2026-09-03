@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { requireProject } from "@/lib/projects";
 import { CorpusClient } from "./corpus-client";
+import { TestSetsClient } from "./test-sets-client";
 
 export default async function ProjectPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
@@ -15,6 +16,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ projec
     <div>
       <h1>{project.name}</h1>
       <CorpusClient projectId={projectId} />
+      <TestSetsClient projectId={projectId} />
     </div>
   );
 }
