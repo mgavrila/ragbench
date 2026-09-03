@@ -66,12 +66,17 @@ export async function createTestSet(
 
   try {
     await send("generate-testset", { testSetId: testSet.id, organizationId: session.user.organizationId }, testSet.id);
-  } catch {
+  } catch (err) {
     // The row exists but nothing is scheduled for it. Unlike chunk-sets (upsert on conflict), a
     // retry here cannot just re-POST into the same row -- so the row is marked failed in place,
-    // visible in the list rather than stuck at "generating" forever with no explanation.
+    // visible in the list rather than stuck at "generating" forever with no explanation. The
+    // scheduler's own message goes into the row (a queue-policy mismatch and a dead database read
+    // very differently); the response stays generic since the caller cannot act on either.
     await db.update(testSets)
-      .set({ status: "failed", error: "failed to schedule generation" })
+      .set({
+        status: "failed",
+        error: `failed to schedule generation: ${err instanceof Error ? err.message : String(err)}`,
+      })
       .where(eq(testSets.id, testSet.id));
     return NextResponse.json({ error: "failed to schedule generation", testSetId: testSet.id }, { status: 500 });
   }

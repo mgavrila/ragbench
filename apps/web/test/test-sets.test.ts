@@ -143,6 +143,9 @@ describe("test-sets create/list", () => {
     expect(body.testSetId).toBeTruthy();
     const [row] = await getDb().select().from(testSets).where(eq(testSets.id, body.testSetId));
     expect(row.status).toBe("failed");
+    // The scheduler's own message is what says WHY nothing was queued, so it is kept on the row
+    // (the response body stays generic -- the caller cannot act on the difference).
+    expect(row.error).toContain("boss down");
 
     sent.length = 0;
     const retry = await createTestSet(projectId, jsonReq({ name: "Set D retry", generatorModel: "mock-llm" }), session() as never, fakeSend);

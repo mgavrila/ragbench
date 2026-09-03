@@ -61,11 +61,17 @@ export function TestSetsClient({ projectId }: { projectId: string }) {
       setEstimate(null);
       return;
     }
+    // Debounced: the count input fires this effect on every keystroke ("30" typed over an empty
+    // field is 1, then 3, then 30), and each estimate is a request that reads the project's
+    // documents. The cancelled flag still guards the response, so a request already in flight when
+    // the inputs change cannot overwrite the estimate for the newer ones.
     let cancelled = false;
-    fetch(`/api/projects/${projectId}/test-sets/estimate?model=${encodeURIComponent(model)}&count=${count}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body) => { if (!cancelled) setEstimate(body); });
-    return () => { cancelled = true; };
+    const timer = setTimeout(() => {
+      fetch(`/api/projects/${projectId}/test-sets/estimate?model=${encodeURIComponent(model)}&count=${count}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body) => { if (!cancelled) setEstimate(body); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [projectId, model, target]);
 
   async function handleCreate(e: FormEvent<HTMLFormElement>) {
