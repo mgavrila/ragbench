@@ -1,3 +1,7 @@
 export * from "./registry";
 export * from "./providers/types";
 export * from "./providers/mock";
+export * from "./providers/anthropic";
+export * from "./providers/openai";
+export * from "./providers/google";
+export * from "./providers/factory";
