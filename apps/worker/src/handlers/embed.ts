@@ -1,6 +1,6 @@
 import { and, eq, notExists } from "drizzle-orm";
 import { chunkEmbeddings, chunks, makeUsageReporter } from "@ragbench/db";
-import { EMBEDDING_MODELS, makeEmbedder } from "@ragbench/core";
+import { lookupEmbeddingModel, makeEmbedder } from "@ragbench/core";
 import type { JobHandler } from "../queue";
 
 // No status field on chunks/chunk_embeddings owns "embedding failed" (spec §4 note): both
@@ -8,7 +8,7 @@ import type { JobHandler } from "../queue";
 // the job or fails it visibly. Do not catch-and-mark here.
 export const embedHandler: JobHandler<{ chunkSetId: string; model: string; organizationId: string }> =
   async ({ chunkSetId, model, organizationId }, { db }) => {
-    const dimension = EMBEDDING_MODELS[model]?.dimension;
+    const dimension = lookupEmbeddingModel(model)?.dimension;
     if (!dimension) throw new Error(`unknown embedding model: ${model}`);
     const embedder = makeEmbedder(model, makeUsageReporter(db, organizationId));
 

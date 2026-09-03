@@ -1,9 +1,13 @@
 import { and, eq } from "drizzle-orm";
 import { chunkSets, chunks, documents } from "@ragbench/db";
 import { CHUNKERS } from "@ragbench/core";
-import type { JobHandler } from "../queue";
+import { enqueue, type JobHandler } from "../queue";
 
-export const chunkHandler: JobHandler<{ chunkSetId: string }> = async ({ chunkSetId }, { db }) => {
+export const chunkHandler: JobHandler<{
+  chunkSetId: string;
+  embedModel?: string;
+  organizationId?: string;
+}> = async ({ chunkSetId, embedModel, organizationId }, { db, boss }) => {
   const [set] = await db.select().from(chunkSets).where(eq(chunkSets.id, chunkSetId));
   if (!set) return;
   const chunker = CHUNKERS[set.chunker];
@@ -26,4 +30,12 @@ export const chunkHandler: JobHandler<{ chunkSetId: string }> = async ({ chunkSe
       })));
     }
   });
+
+  // Enqueued only after the transaction above has committed, so the embed job is guaranteed to see
+  // the chunks it is meant to embed. A failure here (or a crash before it) leaves the chunks built
+  // but unembedded; pg-boss retries the whole job, and both halves are idempotent -- the rebuild
+  // replaces the same rows and embed skips chunks it has already embedded.
+  if (embedModel && organizationId) {
+    await enqueue(boss, "embed", { chunkSetId, model: embedModel, organizationId }, `${chunkSetId}:${embedModel}`);
+  }
 };
