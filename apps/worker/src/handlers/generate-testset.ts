@@ -22,6 +22,32 @@ function questionKey(documentId: string, question: string): string {
 }
 
 /**
+ * Asks the cheap model whether a question is trivially string-matchable, and answers "keep it"
+ * unless it says so clearly. Every uncertain outcome fails open, including the gate provider
+ * failing outright: the gate runs on a *different* model than the generator, so treating its
+ * outage as a set-level failure would sink a generation run that is otherwise working. Losing the
+ * gate costs a few weak questions the user can delete in review, which is far cheaper than losing
+ * the set. Only a non-provider failure (a bug in here) propagates.
+ */
+export async function passesTrivialityGate(
+  gate: LLMProvider,
+  question: string,
+  quote: string,
+): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await gate.complete({
+      prompt: buildTrivialityGatePrompt(question, quote),
+      maxTokens: GATE_MAX_TOKENS,
+    });
+  } catch (err) {
+    if (err instanceof ProviderError) return true;
+    throw err;
+  }
+  return parseGateJson(raw) !== true;
+}
+
+/**
  * Interleaves each document's passages so consecutive questions come from different documents.
  * Generation stops as soon as the target is met, so without the interleave a short target would be
  * filled entirely from the first document and the test set would only ever probe one part of the
@@ -138,15 +164,9 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
             const key = questionKey(doc.id, candidate.question);
             if (asked.has(key)) continue;
 
-            if (gate) {
-              const verdict = parseGateJson(await gate.complete({
-                prompt: buildTrivialityGatePrompt(candidate.question, candidate.quote),
-                maxTokens: GATE_MAX_TOKENS,
-              }));
-              // Fails open: an unparseable verdict keeps the question, since a gate outage should
-              // cost the user a few weak questions, not the whole test set.
-              if (verdict === true) continue;
-            }
+            // Gate failures never reach the catch below: passesTrivialityGate owns them and keeps
+            // the question, so only the generator call can fail or retry the set.
+            if (gate && !(await passesTrivialityGate(gate, candidate.question, candidate.quote))) continue;
 
             // Inserted one at a time, as they are verified: this is what a retry resumes from.
             await db.insert(testQuestions).values({
@@ -158,13 +178,14 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
           }
         }
       } catch (err) {
-        // Provider failures split by whether another attempt could plausibly succeed. A rate limit
-        // or a transient network fault is rethrown so pg-boss retries and the resume path above
-        // picks up whatever was already inserted. An auth or fatal error (missing key, model
-        // rejecting the request) cannot be retried into success, so it is attributed to the set --
-        // otherwise three silent retries end with the set stuck in "generating" forever and no
-        // explanation in the UI. Questions already inserted are verified ground truth and stay.
-        // Anything that is not a ProviderError (a DB fault, a bug here) propagates untouched.
+        // Generator failures (the gate handles its own) split by whether another attempt could
+        // plausibly succeed. A rate limit or a transient network fault is rethrown so pg-boss
+        // retries and the resume path above picks up whatever was already inserted. An auth or
+        // fatal error (missing key, model rejecting the request) cannot be retried into success,
+        // so it is attributed to the set -- otherwise three silent retries end with the set stuck
+        // in "generating" forever and no explanation in the UI. Questions already inserted are
+        // verified ground truth and stay. Anything that is not a ProviderError (a DB fault, a bug
+        // here) propagates untouched.
         if (err instanceof ProviderError && !err.retryable) {
           await db.update(testSets)
             .set({ status: "failed", error: err.message })

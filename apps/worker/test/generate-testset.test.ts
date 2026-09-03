@@ -3,8 +3,10 @@ import { and, eq } from "drizzle-orm";
 import {
   createDb, organizations, projects, documents, testSets, testQuestions, usageLog,
 } from "@ragbench/db";
-import { normalizeWs, samplePassages } from "@ragbench/core";
-import { generateTestsetHandler, roundRobinPassages } from "../src/handlers/generate-testset";
+import { ProviderError, normalizeWs, samplePassages, type LLMProvider } from "@ragbench/core";
+import {
+  generateTestsetHandler, passesTrivialityGate, roundRobinPassages,
+} from "../src/handlers/generate-testset";
 
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 let ctx: ReturnType<typeof createDb>;
@@ -51,6 +53,23 @@ function activeQuestions(testSetId: string) {
     .where(and(eq(testQuestions.testSetId, testSetId), eq(testQuestions.status, "active")));
 }
 
+/**
+ * Runs `fn` with no Anthropic credentials in the environment, restoring them afterwards. Tests that
+ * prove "no provider call happened" only prove it when a call would actually have failed, and a
+ * developer machine with a key would otherwise let a regression reach the real API.
+ */
+async function withoutAnthropicCredentials(fn: () => Promise<void>): Promise<void> {
+  const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN };
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_AUTH_TOKEN;
+  try {
+    await fn();
+  } finally {
+    if (saved.key !== undefined) process.env.ANTHROPIC_API_KEY = saved.key;
+    if (saved.token !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = saved.token;
+  }
+}
+
 async function loadSet(testSetId: string) {
   const [row] = await ctx.db.select().from(testSets).where(eq(testSets.id, testSetId));
   return row;
@@ -92,6 +111,47 @@ describe("roundRobinPassages", () => {
     // Quota is ceil(4 / 2) = 2 passages per document from these long texts, not 4 each.
     expect(emitted.filter((p) => p.doc.id === "A")).toHaveLength(2);
     expect(emitted.filter((p) => p.doc.id === "B")).toHaveLength(2);
+  });
+});
+
+describe("passesTrivialityGate", () => {
+  // The gate is the one provider path with no keyless integration coverage, so it is exercised
+  // directly through a stub rather than through the handler.
+  const stubGate = (answer: string | Error): LLMProvider => ({
+    model: "stub-gate",
+    async complete() {
+      if (answer instanceof Error) throw answer;
+      return answer;
+    },
+  });
+
+  it("drops a question the gate calls trivial", async () => {
+    expect(await passesTrivialityGate(stubGate('{"trivial": true}'), "q?", "quote")).toBe(false);
+  });
+
+  it("keeps a question the gate clears", async () => {
+    expect(await passesTrivialityGate(stubGate('{"trivial": false}'), "q?", "quote")).toBe(true);
+  });
+
+  it("keeps the question when the verdict cannot be parsed", async () => {
+    expect(await passesTrivialityGate(stubGate("I'm not sure, honestly."), "q?", "quote")).toBe(true);
+  });
+
+  it("keeps the question when the gate provider is down, retryable or not", async () => {
+    // The gate runs on a different model than the generator, so its outage must cost a few weak
+    // questions -- not the generation run, and not the whole test set.
+    const rateLimited = new ProviderError("rate_limit", "anthropic", "429 slow down");
+    const dead = new ProviderError("auth", "anthropic", "401 no credentials");
+    expect(rateLimited.retryable).toBe(true);
+    expect(dead.retryable).toBe(false);
+
+    expect(await passesTrivialityGate(stubGate(rateLimited), "q?", "quote")).toBe(true);
+    expect(await passesTrivialityGate(stubGate(dead), "q?", "quote")).toBe(true);
+  });
+
+  it("propagates a failure that is not a provider failure", async () => {
+    const bug = new TypeError("undefined is not a function");
+    await expect(passesTrivialityGate(stubGate(bug), "q?", "quote")).rejects.toThrow(bug);
   });
 });
 
@@ -170,8 +230,8 @@ describe("generateTestsetHandler", () => {
 
   it("generates nothing when the target is already met", async () => {
     const projectId = await seedProject("gts-met", [longText("eta")]);
-    // A real model with no API key configured: reaching the generator at all would throw, so the
-    // set turning ready is proof that a met target short-circuits before any provider call.
+    // A real model with credentials stripped below: reaching the generator at all would throw, so
+    // the set turning ready is proof that a met target short-circuits before any provider call.
     const testSetId = await makeSet(projectId, 2, "claude-opus-5");
     const [doc] = await ctx.db.select().from(documents).where(eq(documents.projectId, projectId));
     for (let i = 0; i < 3; i++) {
@@ -180,7 +240,9 @@ describe("generateTestsetHandler", () => {
       });
     }
 
-    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+    await withoutAnthropicCredentials(async () => {
+      await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+    });
 
     expect((await activeQuestions(testSetId)).length).toBe(3);
     expect((await loadSet(testSetId)).status).toBe("ready");
@@ -262,20 +324,14 @@ describe("generateTestsetHandler", () => {
     const projectId = await seedProject("gts-authfail", [longText("lambda")]);
     const testSetId = await makeSet(projectId, 2, "claude-opus-5");
 
-    const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN };
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_AUTH_TOKEN;
-    try {
-      // With no credentials the SDK rejects before any request goes out, which the provider layer
-      // reports as a non-retryable ProviderError -- the class that must land on the set rather
-      // than burn three pg-boss retries and leave it stuck in "generating".
+    // With no credentials the SDK rejects before any request goes out, which the provider layer
+    // reports as a non-retryable ProviderError -- the class that must land on the set rather than
+    // burn three pg-boss retries and leave it stuck in "generating".
+    await withoutAnthropicCredentials(async () => {
       await expect(generateTestsetHandler(
         { testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss },
       )).resolves.toBeUndefined();
-    } finally {
-      if (saved.key !== undefined) process.env.ANTHROPIC_API_KEY = saved.key;
-      if (saved.token !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = saved.token;
-    }
+    });
 
     const set = await loadSet(testSetId);
     expect(set.status).toBe("failed");
