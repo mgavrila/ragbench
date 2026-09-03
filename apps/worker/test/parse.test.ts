@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { eq } from "drizzle-orm";
@@ -30,6 +30,14 @@ async function makeDoc(filename: string, mime: string, fixture?: string) {
   return doc;
 }
 
+/** Same as makeDoc but writes raw bytes, for content the fixtures directory should not carry. */
+async function makeDocWithBytes(filename: string, mime: string, bytes: Buffer) {
+  const doc = await makeDoc(filename, mime);
+  mkdirSync(dirname(documentPath(doc.id)), { recursive: true });
+  writeFileSync(documentPath(doc.id), bytes);
+  return doc;
+}
+
 describe("parseHandler", () => {
   it("parses markdown to ready with text and content hash", async () => {
     const doc = await makeDoc("sample.md", "text/markdown", "sample.md");
@@ -54,6 +62,33 @@ describe("parseHandler", () => {
     const [row] = await ctx.db.select().from(documents).where(eq(documents.id, doc.id));
     expect(row.status).toBe("failed");
     expect(row.error).toBeTruthy();
+  });
+
+  it("fails binary content uploaded under a text mime instead of storing mojibake", async () => {
+    const binary = Buffer.from(Array.from({ length: 2048 }, (_, i) => i % 256));
+    const doc = await makeDocWithBytes("payload.txt", "text/plain", binary);
+    await parseHandler({ documentId: doc.id }, { db: ctx.db, boss: null as never });
+    const [row] = await ctx.db.select().from(documents).where(eq(documents.id, doc.id));
+    expect(row.status).toBe("failed");
+    expect(row.error).toContain("does not appear to be text");
+  });
+
+  it("strips stray NUL bytes from otherwise valid text", async () => {
+    const withNul = Buffer.from(`before${String.fromCharCode(0)}after, plus a normal sentence.`, "utf-8");
+    const doc = await makeDocWithBytes("nul.md", "text/markdown", withNul);
+    await parseHandler({ documentId: doc.id }, { db: ctx.db, boss: null as never });
+    const [row] = await ctx.db.select().from(documents).where(eq(documents.id, doc.id));
+    // Postgres refuses NUL in a text column, so leaving it in would have failed this update.
+    expect(row.status).toBe("ready");
+    expect(row.text).toBe("beforeafter, plus a normal sentence.");
+  });
+
+  it("parses a PDF whose declared mime is text/plain", async () => {
+    const doc = await makeDoc("mislabeled.pdf", "text/plain", "sample.pdf");
+    await parseHandler({ documentId: doc.id }, { db: ctx.db, boss: null as never });
+    const [row] = await ctx.db.select().from(documents).where(eq(documents.id, doc.id));
+    expect(row.status).toBe("ready");
+    expect(row.text).toContain("RAGBench fixture PDF");
   });
 
   it("is a no-op for unknown document ids", async () => {

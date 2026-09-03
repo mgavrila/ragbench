@@ -65,6 +65,17 @@ describe("documents api", () => {
     expect(res.status).toBe(413);
   });
 
+  it("rejects an oversize declared body before reading it", async () => {
+    // No body at all: reaching formData() would fail the request differently, so a 413 here proves
+    // the content-length guard ran first instead of buffering 30MB to discover the same thing.
+    const req = new Request("http://t/upload", {
+      method: "POST",
+      headers: { "content-length": String(30 * 1024 * 1024) },
+    });
+    const res = await uploadDocument(projectId, req, session() as never, fakeSend);
+    expect(res.status).toBe(413);
+  });
+
   it("marks the document failed and returns 500 when post-write processing throws", async () => {
     const failingSend = async () => { throw new Error("boom"); };
     const res = await uploadDocument(projectId, uploadReq("crash.md", "text/markdown", "x"), session() as never, failingSend);

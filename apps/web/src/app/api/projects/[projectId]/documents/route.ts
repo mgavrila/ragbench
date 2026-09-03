@@ -11,6 +11,9 @@ import type { Session } from "next-auth";
 
 const ALLOWED_MIMES = new Set(["application/pdf", "text/markdown", "text/plain"]);
 const MAX_BYTES = 20 * 1024 * 1024;
+// Multipart framing (boundaries, part headers) makes a request legitimately larger than the file
+// it carries, so the request-level cap sits above the file cap rather than at it.
+const MAX_REQUEST_BYTES = 25 * 1024 * 1024;
 
 export async function listDocuments(projectId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -30,6 +33,13 @@ export async function uploadDocument(
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const project = await requireProject(projectId, session);
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  // formData() buffers the whole body before the per-file check below can run, so a declared
+  // oversize body is refused up front instead of being read into memory first.
+  const declaredBytes = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_REQUEST_BYTES) {
+    return NextResponse.json({ error: "file too large (max 20MB)" }, { status: 413 });
+  }
 
   const form = await req.formData().catch(() => null);
   const file = form?.get("file");

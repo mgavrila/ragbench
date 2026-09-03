@@ -1,4 +1,4 @@
-import { migrateDb } from "@ragbench/db";
+import { migrateDb, uploadsDir } from "@ragbench/db";
 import { startWorker } from "./queue";
 import { parseHandler } from "./handlers/parse";
 import { chunkHandler } from "./handlers/chunk";
@@ -22,7 +22,9 @@ const { stop } = await startWorker({
     // generate-testset, evaluate-question, attribute
   },
 });
-console.log("ragbench worker started");
+// The web app writes uploads here and this process reads them; if the two resolve
+// RAGBENCH_UPLOADS_DIR differently every parse job fails with ENOENT, so print what we resolved.
+console.log(`ragbench worker started (uploads dir: ${uploadsDir()})`);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {
