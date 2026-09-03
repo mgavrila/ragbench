@@ -1,5 +1,8 @@
-import { migrateDb } from "@ragbench/db";
+import { migrateDb, uploadsDir } from "@ragbench/db";
 import { startWorker } from "./queue";
+import { parseHandler } from "./handlers/parse";
+import { chunkHandler } from "./handlers/chunk";
+import { embedHandler } from "./handlers/embed";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 
@@ -12,11 +15,16 @@ console.log("ragbench migrations applied");
 const { stop } = await startWorker({
   databaseUrl,
   handlers: {
-    // pipeline handlers land here in later plans: parse, embed,
+    parse: parseHandler,
+    chunk: chunkHandler,
+    embed: embedHandler,
+    // remaining pipeline handlers land here in later plans:
     // generate-testset, evaluate-question, attribute
   },
 });
-console.log("ragbench worker started");
+// The web app writes uploads here and this process reads them; if the two resolve
+// RAGBENCH_UPLOADS_DIR differently every parse job fails with ENOENT, so print what we resolved.
+console.log(`ragbench worker started (uploads dir: ${uploadsDir()})`);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, async () => {

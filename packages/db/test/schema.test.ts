@@ -43,4 +43,23 @@ describe("schema", () => {
     expect(row.embedding).toHaveLength(3);
     expect(row.embedding[0]).toBeCloseTo(0.1);
   });
+
+  it("cascades document deletion through chunks to embeddings", async () => {
+    const [org] = await ctx.db.insert(organizations).values({ name: "cascade-org" }).returning();
+    const [proj] = await ctx.db.insert(projects).values({ organizationId: org.id, name: "cascade-proj" }).returning();
+    const [doc] = await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "c.md", mime: "text/markdown", contentHash: "ch", text: "hello", status: "ready",
+    }).returning();
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params: { size: 1 }, paramsHash: "cph",
+    }).returning();
+    const [chunk] = await ctx.db.insert(chunks).values({
+      chunkSetId: set.id, documentId: doc.id, idx: 0, text: "hello", startOffset: 0, endOffset: 5,
+    }).returning();
+    await ctx.db.insert(chunkEmbeddings).values({ chunkId: chunk.id, model: "mock-embedding", dimension: 3, embedding: [1, 0, 0] });
+
+    await ctx.db.delete(documents).where(eq(documents.id, doc.id));
+    expect(await ctx.db.select().from(chunks).where(eq(chunks.documentId, doc.id))).toHaveLength(0);
+    expect(await ctx.db.select().from(chunkEmbeddings).where(eq(chunkEmbeddings.chunkId, chunk.id))).toHaveLength(0);
+  });
 });

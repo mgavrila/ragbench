@@ -24,14 +24,27 @@ export const DEFAULT_EMBEDDER = "text-embedding-3-small";
 /** Cheapest real LLM. Gemini's *API tier* is free; the model itself is $0.30/$2.50 per MTok. */
 export const BUDGET_LLM = "gemini-2.5-flash";
 
+/**
+ * Model names arrive from request bodies and job payloads, so registry lookups go through
+ * `Object.hasOwn`: a plain `LLM_MODELS[name]` also resolves inherited keys, and "constructor" or
+ * "toString" would sail past a truthiness check and reach the pricing math as a function.
+ */
+export function lookupLlmModel(model: string): (typeof LLM_MODELS)[string] | undefined {
+  return Object.hasOwn(LLM_MODELS, model) ? LLM_MODELS[model] : undefined;
+}
+
+export function lookupEmbeddingModel(model: string): (typeof EMBEDDING_MODELS)[string] | undefined {
+  return Object.hasOwn(EMBEDDING_MODELS, model) ? EMBEDDING_MODELS[model] : undefined;
+}
+
 export function estimateLlmCostUsd(model: string, inputTokens: number, outputTokens: number): number {
-  const m = LLM_MODELS[model];
+  const m = lookupLlmModel(model);
   if (!m) throw new Error(`unknown LLM model: ${model}`);
   return (inputTokens * m.inputPerMTok + outputTokens * m.outputPerMTok) / 1_000_000;
 }
 
 export function estimateEmbeddingCostUsd(model: string, tokens: number): number {
-  const m = EMBEDDING_MODELS[model];
+  const m = lookupEmbeddingModel(model);
   if (!m) throw new Error(`unknown embedding model: ${model}`);
   return (tokens * m.pricePerMTok) / 1_000_000;
 }

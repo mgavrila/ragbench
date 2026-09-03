@@ -10,7 +10,9 @@
   "dependencies": {
     "@ragbench/core": "workspace:*",
     "@ragbench/db": "workspace:*",
-    "pg-boss": "^12.29.0"
+    "drizzle-orm": "^0.45.2",
+    "pg-boss": "^12.29.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "tsx": "^4.23.13",
