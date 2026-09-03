@@ -21,7 +21,8 @@ export const EMBEDDING_MODELS: Record<
 export const DEFAULT_LLM = "claude-opus-5";
 export const CHEAP_LLM = "claude-haiku-4-5";
 export const DEFAULT_EMBEDDER = "text-embedding-3-small";
-export const FREE_LLM = "gemini-2.5-flash";
+/** Cheapest real LLM. Gemini's *API tier* is free; the model itself is $0.30/$2.50 per MTok. */
+export const BUDGET_LLM = "gemini-2.5-flash";
 
 export function estimateLlmCostUsd(model: string, inputTokens: number, outputTokens: number): number {
   const m = LLM_MODELS[model];
