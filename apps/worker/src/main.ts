@@ -3,6 +3,7 @@ import { startWorker } from "./queue";
 import { parseHandler } from "./handlers/parse";
 import { chunkHandler } from "./handlers/chunk";
 import { embedHandler } from "./handlers/embed";
+import { generateTestsetHandler } from "./handlers/generate-testset";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 
@@ -18,8 +19,9 @@ const { stop } = await startWorker({
     parse: parseHandler,
     chunk: chunkHandler,
     embed: embedHandler,
+    "generate-testset": generateTestsetHandler,
     // remaining pipeline handlers land here in later plans:
-    // generate-testset, evaluate-question, attribute
+    // evaluate-question, attribute
   },
 });
 // The web app writes uploads here and this process reads them; if the two resolve
