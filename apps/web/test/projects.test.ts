@@ -34,4 +34,30 @@ describe("projects api", () => {
     const body = await list.json();
     expect(body.projects.map((p: any) => p.name)).toContain("Docs corpus");
   });
+
+  it("excludes other orgs' projects", async () => {
+    const res = await signup(new Request("http://test/api/signup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: `q${Date.now()}@test.dev`, password: "hunter2xx", organizationName: "Q" }),
+    }));
+    const orgBId: string = (await res.json()).organizationId;
+    const sessionB = { user: { id: "ignored", organizationId: orgBId } };
+
+    const create = await createProject(new Request("http://test/api/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "B-only project" }),
+    }), sessionB);
+    expect(create.status).toBe(201);
+
+    const listA = await listProjects(session());
+    const bodyA = await listA.json();
+    expect(bodyA.projects.map((p: any) => p.name)).not.toContain("B-only project");
+
+    const listB = await listProjects(sessionB);
+    const bodyB = await listB.json();
+    expect(bodyB.projects.map((p: any) => p.name)).toContain("B-only project");
+    expect(bodyB.projects.map((p: any) => p.name)).not.toContain("Docs corpus");
+  });
 });
