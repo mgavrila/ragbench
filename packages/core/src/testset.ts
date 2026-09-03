@@ -1,5 +1,7 @@
 const MIN_QUOTE_CHARS = 12;
-const DEFAULT_PASSAGE_CHARS = 1200;
+// Exported so callers estimating generation cost ahead of a run (no documents chunked yet) can
+// size their per-question token guess off the same window samplePassages actually cuts.
+export const DEFAULT_PASSAGE_CHARS = 1200;
 
 /** Collapse all whitespace runs to a single space and trim the ends. */
 export function normalizeWs(s: string): string {
