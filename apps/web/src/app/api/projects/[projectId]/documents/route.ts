@@ -40,10 +40,20 @@ export async function uploadDocument(
   const [doc] = await getDb().insert(documents).values({
     projectId, filename: file.name, mime: file.type, contentHash: "pending", status: "parsing",
   }).returning();
-  const path = documentPath(doc.id);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, Buffer.from(await file.arrayBuffer()));
-  await send("parse", { documentId: doc.id }, doc.id);
+
+  try {
+    const path = documentPath(doc.id);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, Buffer.from(await file.arrayBuffer()));
+    await send("parse", { documentId: doc.id }, doc.id);
+  } catch (err) {
+    // Nothing will ever run a job for this document (send() itself may be what failed), so if
+    // we leave it at status "parsing" it stays stuck forever. Mark it failed here instead.
+    const message = err instanceof Error ? err.message : String(err);
+    await getDb().update(documents).set({ status: "failed", error: message }).where(eq(documents.id, doc.id));
+    return NextResponse.json({ error: "upload failed", documentId: doc.id }, { status: 500 });
+  }
+
   return NextResponse.json({ document: doc }, { status: 201 });
 }
 

@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
-import { documentPath } from "@ragbench/db";
+import { eq } from "drizzle-orm";
+import { documentPath, documents } from "@ragbench/db";
 import { listDocuments, uploadDocument } from "@/app/api/projects/[projectId]/documents/route";
 import { registerUser } from "@/lib/signup";
 import { createProject } from "@/app/api/projects/route";
+import { getDb } from "@/lib/db";
 
 let orgId: string; let projectId: string;
 const session = () => ({ user: { id: "u", organizationId: orgId } });
@@ -50,5 +52,29 @@ describe("documents api", () => {
     const foreign = await listDocuments(projectId, { user: { id: "u", organizationId: "00000000-0000-0000-0000-000000000000" } } as never);
     expect(foreign.status).toBe(404);
     expect((await uploadDocument(projectId, uploadReq("a.md", "text/markdown", "x"), null as never, fakeSend)).status).toBe(401);
+  });
+
+  it("rejects files over the 20MB limit", async () => {
+    const big = new File([new Uint8Array(20 * 1024 * 1024 + 1)], "big.md", { type: "text/markdown" });
+    const req = new Request("http://t/upload", { method: "POST", body: (() => {
+      const fd = new FormData();
+      fd.set("file", big);
+      return fd;
+    })() });
+    const res = await uploadDocument(projectId, req, session() as never, fakeSend);
+    expect(res.status).toBe(413);
+  });
+
+  it("marks the document failed and returns 500 when post-write processing throws", async () => {
+    const failingSend = async () => { throw new Error("boom"); };
+    const res = await uploadDocument(projectId, uploadReq("crash.md", "text/markdown", "x"), session() as never, failingSend);
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe("upload failed");
+    expect(body.documentId).toBeTruthy();
+
+    const [row] = await getDb().select().from(documents).where(eq(documents.id, body.documentId));
+    expect(row.status).toBe("failed");
+    expect(row.error).toContain("boom");
   });
 });
