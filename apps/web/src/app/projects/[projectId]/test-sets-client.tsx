@@ -100,7 +100,9 @@ export function TestSetsClient({ projectId }: { projectId: string }) {
             <th style={cellStyle}>Name</th>
             <th style={cellStyle}>Model</th>
             <th style={cellStyle}>Status</th>
-            <th style={cellStyle}>Error</th>
+            {/* Not "Error": a ready set can carry an advisory here (why a run kept nothing), and
+                labelling that an error contradicts the status sitting next to it. */}
+            <th style={cellStyle}>Detail</th>
             <th style={cellStyle}>Questions</th>
             <th style={cellStyle}>Created</th>
           </tr>
