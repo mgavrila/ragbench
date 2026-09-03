@@ -102,6 +102,35 @@ describe("samplePassages", () => {
     }
   });
 
+  it("bounds passages on text with no whitespace to snap to", () => {
+    // CJK prose and minified dumps have no word boundaries at all. Scanning forward for one used to
+    // run to the end of the document, so a 48k-char document came back as a single 48k passage:
+    // ~40x the window the cost estimate assumes, and a whole document shipped as one gold answer.
+    for (const doc of ["文字".repeat(24_000), "a".repeat(48_000)]) {
+      const out = samplePassages(doc, 40);
+
+      expect(out.length).toBe(40);
+      for (const p of out) {
+        expect(p.text.length).toBeLessThanOrEqual(1500);
+        expect(doc.slice(p.start, p.end)).toBe(p.text);
+      }
+      for (let i = 1; i < out.length; i++) expect(out[i].start).toBeGreaterThanOrEqual(out[i - 1].end);
+    }
+  });
+
+  it("still snaps to word boundaries when the text has them", () => {
+    // The bound above must not cost normal prose its clean cuts: no passage starts or ends inside a
+    // word while a boundary is within reach.
+    const doc = Array.from({ length: 2000 }, (_, i) => `word${i}`).join(" ");
+    const out = samplePassages(doc, 8, 400);
+
+    expect(out.length).toBe(8);
+    for (const p of out) {
+      if (p.start > 0) expect(doc[p.start - 1]).toMatch(/\s/);
+      if (p.end < doc.length) expect(doc[p.end]).toMatch(/\s/);
+    }
+  });
+
   it("uses default passageChars of ~1200 when not specified", () => {
     const doc = Array.from({ length: 2000 }, (_, i) => `w${i}`).join(" ");
     const out = samplePassages(doc, 2);

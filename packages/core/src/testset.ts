@@ -1,4 +1,11 @@
 const MIN_QUOTE_CHARS = 12;
+// How far past (or before) a window edge the snapping below will look for a word boundary before
+// giving up and cutting mid-word. The scan is bounded rather than "walk until whitespace" because
+// text with no whitespace at all -- CJK prose, a minified JSON dump -- has no boundary to find, and
+// an unbounded scan swallows the entire document into a single passage: the pre-flight cost
+// estimate (which assumes ~passageChars per question) is then wrong by the document's length, and
+// the demo generator ships the whole document as one gold answer.
+const SNAP_SLACK_RATIO = 0.25;
 // Exported so callers estimating generation cost ahead of a run (no documents chunked yet) can
 // size their per-question token guess off the same window samplePassages actually cuts.
 export const DEFAULT_PASSAGE_CHARS = 1200;
@@ -62,17 +69,27 @@ export function samplePassages(
     return [{ text: docText, start: 0, end: len }];
   }
 
-  function snapStart(pos: number): number {
+  const slack = Math.max(1, Math.ceil(passageChars * SNAP_SLACK_RATIO));
+
+  // `floor` is the previous passage's end: backing up to a word boundary must never cross it, or
+  // the windows overlap (and on whitespace-free text every window would back up to 0 and the same
+  // passage would be emitted `count` times).
+  function snapStart(pos: number, floor: number): number {
     let p = Math.max(0, Math.min(pos, len));
-    while (p > 0 && p < len && !/\s/.test(docText[p - 1]) && !/\s/.test(docText[p])) p--;
-    while (p > 0 && /\s/.test(docText[p])) p++;
+    const lowest = Math.max(floor, p - slack);
+    while (p > lowest && p < len && !/\s/.test(docText[p - 1]) && !/\s/.test(docText[p])) p--;
+    while (p > 0 && p < len && /\s/.test(docText[p])) p++;
     return Math.min(p, len);
   }
 
   function snapEnd(pos: number): number {
-    let p = Math.max(0, Math.min(pos, len));
-    while (p < len && !/\s/.test(docText[p])) p++;
-    return p;
+    const p = Math.max(0, Math.min(pos, len));
+    const highest = Math.min(len, p + slack);
+    let q = p;
+    while (q < highest && !/\s/.test(docText[q])) q++;
+    // No boundary within the slack: cut at the requested position rather than scanning on, so the
+    // passage stays ~passageChars regardless of how the text is (or isn't) spaced.
+    return q < highest || q === len ? q : p;
   }
 
   const n = count;
@@ -82,10 +99,10 @@ export function samplePassages(
   let prevEnd = 0;
   for (let i = 0; i < n; i++) {
     const target = n === 1 ? 0 : Math.round((span * i) / (n - 1));
-    let start = snapStart(Math.max(target, prevEnd));
+    let start = snapStart(Math.max(target, prevEnd), prevEnd);
     let end = snapEnd(Math.min(start + passageChars, len));
     if (start >= end) {
-      start = snapStart(prevEnd);
+      start = snapStart(prevEnd, prevEnd);
       end = snapEnd(Math.min(start + passageChars, len));
     }
     if (start >= end || start >= len) break;

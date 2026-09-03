@@ -1,4 +1,9 @@
 const MIN_SENTENCE_CHARS = 30;
+// A gold answer is a short span a grader can compare against, so an over-long "sentence" is not a
+// usable one: text with no sentence punctuation at all (CJK prose, a table dump) splits into a
+// single span covering the whole passage, and shipping that as ground truth makes every answer
+// trivially "correct". Such a passage contributes nothing instead.
+const MAX_SENTENCE_CHARS = 400;
 
 export function buildGenerationPrompt(passage: string, n: number): string {
   return [
@@ -67,7 +72,7 @@ function sentenceSpans(text: string): Span[] {
 
 /**
  * Deterministic demo-mode Q&A generator: no LLM call, no randomness. Splits the passage into
- * sentences, keeps the first `n` sentences of at least 30 chars, and derives each Q&A pair
+ * sentences, keeps the first `n` sentences of workable length, and derives each Q&A pair
  * mechanically from the sentence text so results are fully reproducible.
  *
  * A passage that starts inside the document is cut at a word boundary, not a sentence one, so its
@@ -87,7 +92,7 @@ export function mockGenerateQa(
   for (const span of spans) {
     if (out.length >= n) break;
     const sentence = passage.text.slice(span.start, span.end).trim();
-    if (sentence.length < MIN_SENTENCE_CHARS) continue;
+    if (sentence.length < MIN_SENTENCE_CHARS || sentence.length > MAX_SENTENCE_CHARS) continue;
     const firstFiveWords = sentence.split(/\s+/).slice(0, 5).join(" ");
     out.push({
       question: `What does the document state about ${firstFiveWords}?`,

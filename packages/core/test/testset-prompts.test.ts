@@ -91,6 +91,23 @@ describe("mockGenerateQa", () => {
     expect(out.length).toBe(0);
   });
 
+  it("skips a span too long to be a usable gold answer", () => {
+    // Text with no sentence punctuation (CJK prose, a table dump) splits into one span covering the
+    // whole passage. A 1200-char "answer" is not ground truth a grader can score against, so the
+    // passage contributes nothing rather than an answer that matches anything.
+    const unpunctuated = { text: "文字".repeat(600), start: 0 };
+    expect(mockGenerateQa(unpunctuated, 3)).toEqual([]);
+
+    // A long paragraph still contributes the sentences that are individually short enough.
+    const mixed = {
+      text: `${"clause and ".repeat(60)}end. This one is a perfectly ordinary sentence to keep.`,
+      start: 0,
+    };
+    const out = mockGenerateQa(mixed, 3);
+    expect(out).toHaveLength(1);
+    expect(out[0].quote).toBe("This one is a perfectly ordinary sentence to keep.");
+  });
+
   it("drops the leading mid-sentence fragment of a passage that starts inside the document", () => {
     // samplePassages cuts on word boundaries, so a passage with start > 0 opens mid-sentence. The
     // fragment here is 63 chars -- well past the 30-char floor -- so only the start offset can tell
