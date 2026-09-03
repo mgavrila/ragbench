@@ -152,6 +152,12 @@ export const evalRuns = pgTable("eval_runs", {
   judgeModel: text("judge_model"),
   answerModel: text("answer_model"), // full-mode answer generation model
   status: text("status").notNull().default("pending"), // pending | running | done | cancelled | failed
+  // Terminal, visible run-level failure (house failure philosophy, matching documents.error and
+  // test_sets.error): start-run writes here when no retry could help -- a config whose chunk set was
+  // never embedded for its model, a run with no configs, a test set with no active questions -- and
+  // returns instead of throwing. Cleared when a run starts. Per-question failures live on
+  // question_results.error instead; they never fail the run.
+  error: text("error"),
   totalJobs: integer("total_jobs").notNull().default(0),
   completedJobs: integer("completed_jobs").notNull().default(0),
   createdAt: createdAt(),
