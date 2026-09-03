@@ -4,7 +4,7 @@ import {
   createDb, organizations, projects, documents, chunkSets, chunks, evalRunConfigs, evalRuns,
   questionResults, ragConfigs, testQuestions, testSets, usageLog,
 } from "@ragbench/db";
-import { ProviderError, hashParams, makeEmbedder } from "@ragbench/core";
+import { ProviderError, hashParams, makeEmbedder, makeLLM } from "@ragbench/core";
 import { chunkHandler } from "../src/handlers/chunk";
 import { embedHandler } from "../src/handlers/embed";
 import { startRunHandler } from "../src/handlers/start-run";
@@ -189,6 +189,26 @@ describe("startRunHandler", () => {
     expect(after.error).toContain("text-embedding-3-small");
   });
 
+  it("fails the run, naming the config and the value, when a config's topK is below 1", async () => {
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name: "zero-k", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 0,
+    }).returning();
+    const run = await makeRun("retrieval-only");
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+
+    sentJobs.length = 0;
+    await expect(startRunHandler(
+      { runId: run.id, organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+    )).resolves.toBeUndefined();
+
+    expect(evalJobs()).toHaveLength(0);
+    const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
+    expect(after.status).toBe("failed");
+    expect(after.error).toContain("zero-k");
+    expect(after.error).toContain("0");
+  });
+
   it("no-ops on a missing, done or cancelled run", async () => {
     const done = await makeRun("retrieval-only");
     await ctx.db.update(evalRuns).set({ status: "done" }).where(eq(evalRuns.id, done.id));
@@ -359,6 +379,69 @@ describe("evaluateQuestionHandler (full mode)", () => {
 
     const [finished] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
     expect(finished.status).toBe("done");
+
+    // Demo mode spends nothing but must still show up in the usage ledger, or an org that only ever
+    // ran demo evaluations sees an empty view and cannot tell "nothing ran" from "nothing recorded".
+    const usage = await ctx.db.select().from(usageLog).where(eq(usageLog.organizationId, orgId));
+    const mockAnswers = usage.filter((u) => u.purpose === "answer" && u.model === "mock-llm");
+    const mockJudges = usage.filter((u) => u.purpose === "judge" && u.model === "mock-llm");
+    expect(mockAnswers.length).toBeGreaterThan(0);
+    expect(mockJudges.length).toBeGreaterThan(0);
+    // Synthetic but real counts, at zero cost -- not a row of zeroes.
+    expect(mockAnswers.every((u) => u.inputTokens > 0 && u.outputTokens > 0)).toBe(true);
+    expect(mockAnswers.every((u) => u.costUsd === 0)).toBe(true);
+    expect(mockJudges.every((u) => u.inputTokens > 0 && u.costUsd === 0)).toBe(true);
+  });
+});
+
+describe("evaluateQuestionHandler (judged by a real model)", () => {
+  // The provider seam stands in for a paid judge: these two tests are the only coverage of the
+  // non-mock branch, where the reply is text that has to survive parsing. One shared queue across
+  // both providers the handler constructs, so the answer call takes the first scripted reply and
+  // the judge call the second.
+  const scripted = (...replies: string[]): typeof makeLLM => {
+    const queue = [...replies];
+    return () => ({
+      model: "scripted",
+      async complete(): Promise<string> { return queue.shift() ?? "queue exhausted"; },
+    });
+  };
+
+  async function judgedJob(name: string, llm: typeof makeLLM) {
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name, chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+    }).returning();
+    // A non-mock judge with no answerModel: the run answers with its judge model too.
+    const run = await makeRun("full", { judgeModel: "claude-opus-5" });
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+    sentJobs.length = 0;
+    await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+    const job = evalJobs()[0];
+    await evaluateQuestionHandler(job, { db: ctx.db, boss: recordingBoss }, makeEmbedder, llm);
+    return resultFor(job.runId, job.configId, job.questionId);
+  }
+
+  it("stores the parsed scores when the judge replies with valid JSON", async () => {
+    const row = await judgedJob("judge-json", scripted(
+      "The chloroplast converts sunlight into glucose.",
+      '{"faithfulness": 0.9, "correctness": 0.75, "reason": "close enough"}',
+    ));
+    expect(row.status).toBe("done");
+    expect(row.answer).toBe("The chloroplast converts sunlight into glucose.");
+    expect(row.faithfulness).toBe(0.9);
+    expect(row.correctness).toBe(0.75);
+    expect(row.judgeRaw).toEqual({ raw: '{"faithfulness": 0.9, "correctness": 0.75, "reason": "close enough"}' });
+  });
+
+  it("leaves the scores null but keeps the raw reply when the judge does not return JSON", async () => {
+    const row = await judgedJob("judge-garbage", scripted("Some answer.", "not json at all"));
+    // Null, never 0: an unscored answer must not be averaged in as a zero-scored one.
+    expect(row.faithfulness).toBeNull();
+    expect(row.correctness).toBeNull();
+    expect(row.judgeRaw).toEqual({ raw: "not json at all" });
+    // The retrieval half of the row is unaffected by an unparseable judge.
+    expect(row.status).toBe("done");
+    expect(row.hit).not.toBeNull();
   });
 });
 
@@ -418,6 +501,38 @@ describe("evaluateQuestionHandler failure attribution", () => {
       job, { db: ctx.db, boss: recordingBoss }, poisoned(new ProviderError("rate_limit", "poison", "slow down")),
     )).rejects.toThrow("slow down");
     expect(await resultFor(job.runId, job.configId, job.questionId)).toBeUndefined();
+  });
+
+  it("keeps the retrieval result on the failed row when only the answer or judge failed", async () => {
+    const poisonedLLM = (err: Error): typeof makeLLM => () => ({
+      model: "poison",
+      async complete(): Promise<string> { throw err; },
+    });
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name: "llm-fail", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+    }).returning();
+    const run = await makeRun("full", { judgeModel: "mock-llm", answerModel: "claude-opus-5" });
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+    sentJobs.length = 0;
+    await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+    const job = evalJobs().find((j) => j.questionId === qHit);
+    if (!job) throw new Error("fan-out did not include the hit question");
+
+    await expect(evaluateQuestionHandler(
+      job, { db: ctx.db, boss: recordingBoss }, makeEmbedder,
+      poisonedLLM(new ProviderError("auth", "poison", "no credentials")),
+    )).resolves.toBeUndefined();
+
+    const row = await resultFor(job.runId, job.configId, job.questionId);
+    expect(row.status).toBe("failed");
+    expect(row.error).toBe("no credentials");
+    // Retrieval already succeeded and cost real money: throwing it away would turn a judge outage
+    // into a fake retrieval miss, which is exactly the misdiagnosis this product exists to prevent.
+    expect(row.hit).toBe(true);
+    expect(row.reciprocalRank).toBe(1);
+    expect(row.retrieved).toHaveLength(2);
+    expect(row.answer).toBeNull();
+    expect(row.faithfulness).toBeNull();
   });
 
   it("propagates a failure that is not a ProviderError untouched", async () => {

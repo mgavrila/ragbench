@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 import {
   evalRuns, makeUsageReporter, questionResults, ragConfigs, testQuestions, type Db,
 } from "@ragbench/db";
@@ -7,7 +7,7 @@ import {
   mockAnswer, mockJudge, parseJudgeJson, type JudgeResult, type UsageReporter,
 } from "@ragbench/core";
 import type { PgBoss } from "pg-boss";
-import { retrieveTopK } from "../retrieve";
+import { retrieveTopK, type RetrievedChunk } from "../retrieve";
 
 // An answer grounded in a handful of excerpts is a paragraph, not an essay; the judge returns one
 // small JSON object. Both caps exist so a rambling model cannot turn one question into a large bill.
@@ -16,6 +16,41 @@ const JUDGE_MAX_TOKENS = 300;
 
 /** Demo-mode model id. Routed to the deterministic pure functions instead of any provider call. */
 const MOCK_LLM = "mock-llm";
+
+/** Whitespace-token stand-in for a real tokenizer, matching what the mock providers report. */
+function estimateTokens(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Demo mode makes no provider call, but a demo run still has to appear in the usage view -- an org
+ * that only ever ran demo evaluations would otherwise see an empty ledger with no way to tell
+ * "nothing ran" from "nothing was recorded". Synthetic counts over the prompt a real model WOULD
+ * have received, at zero cost (mock-llm is priced at 0). Mirrors generate-testset's mock metering.
+ */
+async function reportMockUsage(
+  report: UsageReporter,
+  purpose: string,
+  prompt: string,
+  output: string,
+): Promise<void> {
+  await report({
+    purpose,
+    provider: "mock",
+    model: MOCK_LLM,
+    inputTokens: estimateTokens(prompt),
+    outputTokens: estimateTokens(output),
+  });
+}
+
+/**
+ * Retrieval as it is stored on the row. Rank is 1-based and written out rather than left implicit
+ * in array order, so the drill-down UI and any later attribution pass read the same numbering the
+ * reciprocal rank was computed from.
+ */
+function storedRetrieval(retrieved: RetrievedChunk[]): Array<{ chunkId: string; rank: number; score: number }> {
+  return retrieved.map((r, i) => ({ chunkId: r.chunkId, rank: i + 1, score: r.score }));
+}
 
 type ResultKey = { runId: string; configId: string; questionId: string };
 type ResultFields = Omit<typeof questionResults.$inferInsert, "runId" | "configId" | "questionId" | "id">;
@@ -30,6 +65,13 @@ function keyFilter(key: ResultKey) {
 
 /**
  * Writes the one result row for (run, config, question), replacing a previous FAILED attempt.
+ *
+ * TABLE SEMANTICS (ruling): `status` describes how far the job got, NOT which columns are
+ * trustworthy. A `failed` row MAY carry retrieved/hit/reciprocalRank -- retrieval succeeded and only
+ * the answer or judge failed, and discarding a real (already paid-for) retrieval result would turn
+ * a judge outage into a fake retrieval miss. Downstream aggregates must therefore key off the
+ * columns, not the status: hit rate and MRR over rows WHERE hit IS NOT NULL, and faithfulness /
+ * correctness averaged over their non-null values only.
  *
  * The row is unique on that triple, so this is an upsert with a deliberate asymmetry: a failed row
  * is deleted first (a retry after a provider outage must be able to overwrite it with a real
@@ -58,7 +100,12 @@ async function recordProgress(db: Db, runId: string): Promise<void> {
   const [counted] = await db.select({ n: sql<number>`count(*)`.mapWith(Number) })
     .from(questionResults).where(eq(questionResults.runId, runId));
   const completed = counted?.n ?? 0;
-  await db.update(evalRuns).set({ completedJobs: completed }).where(eq(evalRuns.id, runId));
+  // Monotonic: two jobs finishing at once can read their counts in one order and write them in the
+  // other, so the lower write must not land on top of the higher one and walk a finished run's
+  // progress backwards. (The count can only legitimately fall if result rows are deleted, which
+  // nothing does.)
+  await db.update(evalRuns).set({ completedJobs: completed })
+    .where(and(eq(evalRuns.id, runId), lt(evalRuns.completedJobs, completed)));
   // Guarded on `running` so a run cancelled while its last jobs were in flight is not flipped to
   // done behind the user's back.
   if (run.totalJobs > 0 && completed >= run.totalJobs) {
@@ -116,13 +163,22 @@ export const evaluateQuestionHandler = async (
   let answer: string | null = null;
   let judge: JudgeResult | null = null;
   let judgeRaw: { raw: string } | null = null;
-  let retrieved: Awaited<ReturnType<typeof retrieveTopK>>;
+  let retrieved: RetrievedChunk[] = [];
+  // Null until retrieval has actually been scored, which is what tells the catch below whether
+  // there is a real retrieval result worth keeping on a failed row.
+  let scored: { hit: boolean; reciprocalRank: number } | null = null;
 
   try {
     // Constructed inside the try so a provider SDK throwing from its constructor (malformed key,
     // unsupported option) is attributed like any other provider failure instead of escaping.
     const embedder = embedderFactory(config.embeddingModel, queryEmbedReporter);
     const [queryEmbedding] = await embedder.embed([question.question]);
+    // An embedder that returns an empty batch is a provider misbehaving, not an empty result set:
+    // continuing would retrieve nothing and record a confident zero-hit row, which reads as "this
+    // config cannot retrieve" instead of "the embedding call came back empty".
+    if (queryEmbedding === undefined) {
+      throw new ProviderError("fatal", config.embeddingModel, "embedder returned no vector for the question");
+    }
     retrieved = await retrieveTopK(db, {
       chunkSetId: config.chunkSetId,
       model: config.embeddingModel,
@@ -130,18 +186,34 @@ export const evaluateQuestionHandler = async (
       k: config.topK,
     });
 
+    // INHERITED CAVEAT (do not "fix" here): verifyQuote, which produced these gold spans during
+    // test-set generation, resolves a quote to its FIRST occurrence in the document. On a
+    // repetitive corpus the passage the question was actually written from may be a LATER
+    // occurrence, so retrieval that correctly finds that later occurrence overlaps a different span
+    // and scores as a miss. hit@k and MRR are therefore a conservative lower bound on real
+    // retrieval quality, never an overstatement. Plan 5 is aware.
+    //
+    // Scored here rather than after the try so that a later answer/judge failure can still record
+    // it: pure arithmetic over rows already in hand, so it adds nothing to what the catch handles.
+    scored = evaluateRetrieval(
+      retrieved.map((r) => ({ documentId: r.documentId, span: { start: r.startOffset, end: r.endOffset } })),
+      { documentId: question.documentId, span: { start: question.goldStart, end: question.goldEnd } },
+    );
+
     if (run.mode === "full") {
       const chunkTexts = retrieved.map((r) => r.text);
       // answerModel is optional: a run that only pinned a judge answers with it too, rather than
       // failing over a field the user never had to fill in.
       const answerModel = run.answerModel ?? run.judgeModel;
       if (answerModel) {
-        answer = answerModel === MOCK_LLM
-          ? mockAnswer(question.question, chunkTexts)
-          : await llmFactory(answerModel, reporter, "answer").complete({
-              prompt: buildAnswerPrompt(question.question, chunkTexts),
-              maxTokens: ANSWER_MAX_TOKENS,
-            });
+        const answerPrompt = buildAnswerPrompt(question.question, chunkTexts);
+        if (answerModel === MOCK_LLM) {
+          answer = mockAnswer(question.question, chunkTexts);
+          await reportMockUsage(reporter, "answer", answerPrompt, answer);
+        } else {
+          answer = await llmFactory(answerModel, reporter, "answer")
+            .complete({ prompt: answerPrompt, maxTokens: ANSWER_MAX_TOKENS });
+        }
       }
       if (answer !== null && run.judgeModel) {
         if (run.judgeModel === MOCK_LLM) {
@@ -149,6 +221,12 @@ export const evaluateQuestionHandler = async (
           // Stored in the same shape as a real judge's reply -- the mock's scores ARE what a
           // well-behaved judge would have returned -- so the drill-down UI has one shape to render.
           judgeRaw = { raw: JSON.stringify(judge) };
+          await reportMockUsage(
+            reporter,
+            "judge",
+            buildJudgePrompt(question.question, question.goldAnswer, answer, chunkTexts),
+            judgeRaw.raw,
+          );
         } else {
           const raw = await llmFactory(run.judgeModel, reporter, "judge").complete({
             prompt: buildJudgePrompt(question.question, question.goldAnswer, answer, chunkTexts),
@@ -169,30 +247,27 @@ export const evaluateQuestionHandler = async (
     // limit, transient fault) and anything that is not a ProviderError (a DB fault, a bug here)
     // propagate untouched for pg-boss to retry.
     if (err instanceof ProviderError && !err.retryable) {
-      await writeResult(db, key, { status: "failed", error: err.message });
+      // Whatever retrieval produced before the failure is kept (see the ruling on writeResult): if
+      // only the answer or judge call failed, the retrieval half of this row is a real, already
+      // paid-for result, and dropping it would show up downstream as a retrieval miss that never
+      // happened. When retrieval itself is what failed, `scored` is null and these stay null.
+      await writeResult(db, key, {
+        retrieved: scored ? storedRetrieval(retrieved) : null,
+        hit: scored?.hit ?? null,
+        reciprocalRank: scored?.reciprocalRank ?? null,
+        status: "failed",
+        error: err.message,
+      });
       await recordProgress(db, runId);
       return;
     }
     throw err;
   }
 
-  // INHERITED CAVEAT (do not "fix" here): verifyQuote, which produced these gold spans during
-  // test-set generation, resolves a quote to its FIRST occurrence in the document. On a repetitive
-  // corpus the passage the question was actually written from may be a LATER occurrence, so
-  // retrieval that correctly finds that later occurrence overlaps a different span and scores as a
-  // miss. hit@k and MRR are therefore a conservative lower bound on real retrieval quality, never
-  // an overstatement. Plan 5 is aware.
-  const { hit, reciprocalRank } = evaluateRetrieval(
-    retrieved.map((r) => ({ documentId: r.documentId, span: { start: r.startOffset, end: r.endOffset } })),
-    { documentId: question.documentId, span: { start: question.goldStart, end: question.goldEnd } },
-  );
-
   await writeResult(db, key, {
-    // Rank is 1-based and stored rather than left implicit in array order, so the drill-down UI and
-    // any later attribution pass read the same numbering this run's reciprocal rank was computed from.
-    retrieved: retrieved.map((r, i) => ({ chunkId: r.chunkId, rank: i + 1, score: r.score })),
-    hit,
-    reciprocalRank,
+    retrieved: storedRetrieval(retrieved),
+    hit: scored.hit,
+    reciprocalRank: scored.reciprocalRank,
     answer,
     faithfulness: judge?.faithfulness ?? null,
     correctness: judge?.correctness ?? null,

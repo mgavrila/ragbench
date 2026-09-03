@@ -48,11 +48,21 @@ export const startRunHandler: JobHandler<{ runId: string; organizationId: string
       return;
     }
 
-    // Every config must be able to retrieve at all. Without this check a config whose chunk set was
-    // never embedded under its embedding model produces a full grid of zero-hit rows, which reads
-    // as "this config is terrible at retrieval" when the truth is that it never ran -- exactly the
-    // misdiagnosis this product exists to prevent. One cheap existence probe per config.
+    // Every config must be able to retrieve at all. Without these checks a config that cannot
+    // retrieve produces a full grid of zero-hit rows, which reads as "this config is terrible at
+    // retrieval" when the truth is that it never ran -- exactly the misdiagnosis this product
+    // exists to prevent. Both are terminal: no retry changes a stored topK or an unembedded set.
     for (const config of configs) {
+      // topK below 1 asks for no chunks at all. The API validates 1..50, so this catches hand-made
+      // or hand-edited rows before they turn into a grid of guaranteed misses.
+      if (config.topK < 1) {
+        await failRun(
+          db,
+          runId,
+          `config "${config.name}" has topK ${config.topK}, which retrieves nothing -- it must be at least 1`,
+        );
+        return;
+      }
       const [embedded] = await db.select({ id: chunkEmbeddings.id })
         .from(chunkEmbeddings)
         .innerJoin(chunks, eq(chunks.id, chunkEmbeddings.chunkId))
