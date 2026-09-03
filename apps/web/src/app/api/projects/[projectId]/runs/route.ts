@@ -103,8 +103,8 @@ export async function createRun(
   const setById = new Map(sets.map((s) => [s.id, s]));
 
   const staleConfigIds: string[] = [];
-  // Chunk sets have no name of their own -- the config's name is what the user actually recognizes,
-  // so it stands in for "which chunk set" in the error message.
+  // Chunk sets have no name of their own -- the message names the config instead ("config X's
+  // chunk set"), which doesn't imply chunk sets have names of their own.
   let staleConfigName: string | undefined;
   for (const config of configs) {
     const set = setById.get(config.chunkSetId);
@@ -117,7 +117,7 @@ export async function createRun(
   }
   if (staleConfigIds.length > 0) {
     return NextResponse.json(
-      { error: `chunk set ${staleConfigName} is stale -- rebuild it before running`, staleConfigIds },
+      { error: `config "${staleConfigName}"'s chunk set is stale -- rebuild it before running`, staleConfigIds },
       { status: 409 },
     );
   }

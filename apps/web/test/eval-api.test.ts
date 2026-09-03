@@ -85,6 +85,12 @@ describe("configs api", () => {
     expect((await listConfigs(projectId, foreignSession() as never)).status).toBe(404);
     expect((await listConfigs(projectId, null as never)).status).toBe(401);
   });
+
+  it("blocks foreign orgs and unauthenticated requests on create", async () => {
+    const body = { name: "X", chunkSetId, embeddingModel: "mock-embedding", topK: 5 };
+    expect((await createConfig(projectId, jsonReq(body), foreignSession() as never)).status).toBe(404);
+    expect((await createConfig(projectId, jsonReq(body), null as never)).status).toBe(401);
+  });
 });
 
 describe("runs api", () => {
@@ -195,7 +201,7 @@ describe("runs api", () => {
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.staleConfigIds).toEqual([staleConfigId]);
-    expect(body.error).toContain("stale");
+    expect(body.error).toBe(`config "Stale Cfg"'s chunk set is stale -- rebuild it before running`);
   });
 
   it("creates a run, defaults judgeModel to mock-llm, and enqueues start-run with the run id as key", async () => {
@@ -334,6 +340,56 @@ describe("runs api", () => {
       expect((await getResultCell(runId, configId, questionId, foreignSession() as never)).status).toBe(404);
       expect((await getResultCell(runId, configId, questionId, null as never)).status).toBe(401);
       expect((await getResultCell(runId, "00000000-0000-0000-0000-000000000000", questionId, session() as never)).status).toBe(404);
+    });
+  });
+
+  describe("frozen question denominator", () => {
+    it("keeps `questions` at the fan-out count after a mid-run question soft-delete", async () => {
+      const [freezeSet] = await getDb().insert(testSets).values({
+        projectId, name: "Freeze TS", generatorModel: "mock-llm", questionsTarget: 5, status: "ready",
+      }).returning();
+      const [q1] = await getDb().insert(testQuestions).values([
+        { testSetId: freezeSet.id, documentId: docId, question: "F1?", goldAnswer: "hello", goldStart: 0, goldEnd: 5 },
+        { testSetId: freezeSet.id, documentId: docId, question: "F2?", goldAnswer: "hello", goldStart: 0, goldEnd: 5 },
+      ]).returning();
+
+      const res = await createRun(
+        projectId, jsonReq({ testSetId: freezeSet.id, configIds: [configId], mode: "retrieval-only" }), session() as never, fakeSend,
+      );
+      const { run } = await res.json();
+
+      // Simulate start-run's fan-out having happened (1 config x 2 questions = 2 total jobs)
+      // without actually running the worker.
+      await getDb().update(evalRuns).set({ status: "running", totalJobs: 2 }).where(eq(evalRuns.id, run.id));
+
+      // A question soft-deleted mid-run must not shrink the denominator: evaluated/failed are
+      // counted against the frozen fan-out (totalJobs), not against whatever is still active now.
+      await getDb().update(testQuestions).set({ status: "deleted" }).where(eq(testQuestions.id, q1.id));
+
+      const detail = await getRun(run.id, session() as never);
+      const body = await detail.json();
+      expect(body.configs[0].aggregates.questions).toBe(2);
+    });
+
+    it("uses the live active-question count while the run is still pending", async () => {
+      const [pendingSet] = await getDb().insert(testSets).values({
+        projectId, name: "Pending TS", generatorModel: "mock-llm", questionsTarget: 5, status: "ready",
+      }).returning();
+      await getDb().insert(testQuestions).values([
+        { testSetId: pendingSet.id, documentId: docId, question: "P1?", goldAnswer: "hello", goldStart: 0, goldEnd: 5 },
+        { testSetId: pendingSet.id, documentId: docId, question: "P2?", goldAnswer: "hello", goldStart: 0, goldEnd: 5 },
+        { testSetId: pendingSet.id, documentId: docId, question: "P3?", goldAnswer: "hello", goldStart: 0, goldEnd: 5 },
+      ]);
+
+      const res = await createRun(
+        projectId, jsonReq({ testSetId: pendingSet.id, configIds: [configId], mode: "retrieval-only" }), session() as never, fakeSend,
+      );
+      const { run } = await res.json();
+      expect(run.totalJobs).toBe(0); // still pending -- start-run (task 3) hasn't fanned out
+
+      const detail = await getRun(run.id, session() as never);
+      const body = await detail.json();
+      expect(body.configs[0].aggregates.questions).toBe(3);
     });
   });
 });

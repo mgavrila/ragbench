@@ -28,9 +28,16 @@ export async function getRun(runId: string, session: Session | null) {
   }
   const { run } = row;
 
-  // The question count is the same for every config in the run (it's the test set's active-question
-  // snapshot start-run fanned out against), so it's computed once rather than per config.
-  const [{ questions }] = await db.select({ questions: sql<number>`count(*)`.mapWith(Number) })
+  // Denominator for `questions` in every config's aggregates (same figure for every config in the
+  // run). While the run is still pending (totalJobs === 0: start-run hasn't fanned out yet) this
+  // tracks the test set's LIVE active-question count, the best estimate of what a run would draw on
+  // if started right now. Once the run has started, start-run has snapshotted a FIXED question set
+  // and totalJobs records exactly how many (config, question) jobs it fanned out against that
+  // snapshot -- from then on the denominator must stay pinned to it. Falling back to a live count
+  // post-start would shrink the denominator the moment a question is soft-deleted mid-run, while
+  // evaluated/failed (counted against the frozen fan-out) stay the same -- reading as an impossible
+  // >100% of a denominator that never actually shrank for this run.
+  const [{ questions: liveActiveQuestions }] = await db.select({ questions: sql<number>`count(*)`.mapWith(Number) })
     .from(testQuestions)
     .where(and(eq(testQuestions.testSetId, run.testSetId), eq(testQuestions.status, "active")));
 
@@ -65,6 +72,10 @@ export async function getRun(runId: string, session: Session | null) {
     .where(eq(evalRunConfigs.runId, runId))
     .groupBy(ragConfigs.id)
     .orderBy(ragConfigs.createdAt, ragConfigs.id);
+
+  const questions = run.totalJobs > 0 && configRows.length > 0
+    ? run.totalJobs / configRows.length
+    : liveActiveQuestions;
 
   const configs = configRows.map((c) => ({
     config: { id: c.id, name: c.name, chunkSetId: c.chunkSetId, embeddingModel: c.embeddingModel, topK: c.topK, createdAt: c.createdAt },
