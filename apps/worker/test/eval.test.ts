@@ -206,7 +206,7 @@ describe("startRunHandler", () => {
     const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
     expect(after.status).toBe("failed");
     expect(after.error).toContain("zero-k");
-    expect(after.error).toContain("0");
+    expect(after.error).toContain("topK 0");
   });
 
   it("no-ops on a missing, done or cancelled run", async () => {
@@ -533,6 +533,48 @@ describe("evaluateQuestionHandler failure attribution", () => {
     expect(row.retrieved).toHaveLength(2);
     expect(row.answer).toBeNull();
     expect(row.faithfulness).toBeNull();
+  });
+
+  it("keeps the answer too when the judge is the only step that failed", async () => {
+    // Answers on the first call, throws on the second: the handler builds one provider for the
+    // answer and one for the judge, so this fails exactly the judge call.
+    const answerThenFail = (answerText: string, err: Error): typeof makeLLM => {
+      let calls = 0;
+      return () => ({
+        model: "half-poison",
+        async complete(): Promise<string> {
+          calls += 1;
+          if (calls === 1) return answerText;
+          throw err;
+        },
+      });
+    };
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name: "judge-fail", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+    }).returning();
+    const run = await makeRun("full", { judgeModel: "claude-opus-5" });
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+    sentJobs.length = 0;
+    await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+    const job = evalJobs().find((j) => j.questionId === qHit);
+    if (!job) throw new Error("fan-out did not include the hit question");
+
+    await expect(evaluateQuestionHandler(
+      job, { db: ctx.db, boss: recordingBoss }, makeEmbedder,
+      answerThenFail("Sunlight becomes glucose.", new ProviderError("auth", "anthropic", "judge key rejected")),
+    )).resolves.toBeUndefined();
+
+    const row = await resultFor(job.runId, job.configId, job.questionId);
+    expect(row.status).toBe("failed");
+    expect(row.error).toBe("judge key rejected");
+    // Retrieval AND the answer were paid for before the judge failed; both survive.
+    expect(row.hit).toBe(true);
+    expect(row.reciprocalRank).toBe(1);
+    expect(row.answer).toBe("Sunlight becomes glucose.");
+    // Only the judge's own output is missing.
+    expect(row.judgeRaw).toBeNull();
+    expect(row.faithfulness).toBeNull();
+    expect(row.correctness).toBeNull();
   });
 
   it("propagates a failure that is not a ProviderError untouched", async () => {

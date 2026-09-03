@@ -3,8 +3,9 @@ import {
   evalRuns, makeUsageReporter, questionResults, ragConfigs, testQuestions, type Db,
 } from "@ragbench/db";
 import {
-  ProviderError, buildAnswerPrompt, buildJudgePrompt, evaluateRetrieval, makeEmbedder, makeLLM,
-  mockAnswer, mockJudge, parseJudgeJson, type JudgeResult, type UsageReporter,
+  ProviderError, buildAnswerPrompt, buildJudgePrompt, evaluateRetrieval, lookupEmbeddingModel,
+  makeEmbedder, makeLLM, mockAnswer, mockJudge, parseJudgeJson,
+  type JudgeResult, type UsageReporter,
 } from "@ragbench/core";
 import type { PgBoss } from "pg-boss";
 import { retrieveTopK, type RetrievedChunk } from "../retrieve";
@@ -177,7 +178,14 @@ export const evaluateQuestionHandler = async (
     // continuing would retrieve nothing and record a confident zero-hit row, which reads as "this
     // config cannot retrieve" instead of "the embedding call came back empty".
     if (queryEmbedding === undefined) {
-      throw new ProviderError("fatal", config.embeddingModel, "embedder returned no vector for the question");
+      throw new ProviderError(
+        "fatal",
+        // ProviderError's second field is the PROVIDER ("openai", "google", "mock"), not the model;
+        // the registry is what maps one to the other. "unknown" only for a model not in it, which
+        // makeEmbedder would already have rejected.
+        lookupEmbeddingModel(config.embeddingModel)?.provider ?? "unknown",
+        `embedder returned no vector for the question (${config.embeddingModel})`,
+      );
     }
     retrieved = await retrieveTopK(db, {
       chunkSetId: config.chunkSetId,
@@ -247,14 +255,16 @@ export const evaluateQuestionHandler = async (
     // limit, transient fault) and anything that is not a ProviderError (a DB fault, a bug here)
     // propagate untouched for pg-boss to retry.
     if (err instanceof ProviderError && !err.retryable) {
-      // Whatever retrieval produced before the failure is kept (see the ruling on writeResult): if
-      // only the answer or judge call failed, the retrieval half of this row is a real, already
-      // paid-for result, and dropping it would show up downstream as a retrieval miss that never
-      // happened. When retrieval itself is what failed, `scored` is null and these stay null.
+      // Everything computed before the failure is kept (see the ruling on writeResult): a row that
+      // failed at the judge still holds a real, already paid-for retrieval result and answer, and
+      // dropping either would show up downstream as a retrieval miss or an unanswered question that
+      // never happened. Each field falls back to null exactly when its own step never got to run.
       await writeResult(db, key, {
         retrieved: scored ? storedRetrieval(retrieved) : null,
         hit: scored?.hit ?? null,
         reciprocalRank: scored?.reciprocalRank ?? null,
+        answer,
+        judgeRaw,
         status: "failed",
         error: err.message,
       });

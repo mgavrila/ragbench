@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { chunkEmbeddings, chunks, type Db } from "@ragbench/db";
-import { ProviderError } from "@ragbench/core";
+import { ProviderError, lookupEmbeddingModel } from "@ragbench/core";
 
 export type RetrievedChunk = {
   chunkId: string;
@@ -44,9 +44,20 @@ export async function retrieveTopK(
   // and lands on the question's row; a topK below 1 is a caller bug that start-run already rejects
   // terminally, so it propagates untouched rather than being dressed up as a provider problem.
   if (opts.queryEmbedding.length === 0) {
-    throw new ProviderError("fatal", opts.model, "cannot retrieve with an empty query embedding");
+    // Second field is the PROVIDER, not the model -- the registry maps one to the other, matching
+    // every other ProviderError site ("openai", "google", "mock").
+    throw new ProviderError(
+      "fatal",
+      lookupEmbeddingModel(opts.model)?.provider ?? "unknown",
+      `cannot retrieve with an empty query embedding (${opts.model})`,
+    );
   }
-  if (opts.k <= 0) throw new Error(`retrieveTopK requires k >= 1, got ${opts.k}`);
+  if (opts.k <= 0) {
+    throw new Error(
+      `retrieveTopK requires k >= 1, got ${opts.k}; startRunHandler validates a config's topK ` +
+        `before fan-out, so reaching this is a caller bug`,
+    );
+  }
   const query = `[${opts.queryEmbedding.join(",")}]`;
   const distance = sql<number>`${chunkEmbeddings.embedding} <=> ${query}::vector`;
 
