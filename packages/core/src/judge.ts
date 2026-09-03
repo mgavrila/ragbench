@@ -85,6 +85,8 @@ export function parseJudgeJson(raw: string): JudgeResult | null {
     const obj = matchJsonObjectAt(raw, i);
     if (!obj) continue;
     const { faithfulness, correctness, reason } = obj;
+    // Number.isFinite is defensive, not load-bearing: JSON grammar has no literal for NaN/Infinity,
+    // so JSON.parse above would already have thrown on such input. Kept in case that ever changes.
     if (
       typeof faithfulness === "number" &&
       Number.isFinite(faithfulness) &&

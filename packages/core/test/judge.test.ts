@@ -118,4 +118,12 @@ describe("mockJudge", () => {
     const answer = "Based on the context: The mitochondria is the powerhouse of the cell.";
     expect(mockJudge(gold, answer).correctness).toBe(1);
   });
+
+  it("never vacuously matches an empty gold answer, even against a non-empty answer", () => {
+    // "".split(" ") yields [""], and "anything".includes("") is always true in JS -- without an
+    // explicit guard, an empty gold answer would score correctness 1 against any answer at all.
+    const result = mockJudge("", "The document confirms: Yes it is.");
+    expect(result.correctness).toBe(0);
+    expect(result.faithfulness).toBe(0);
+  });
 });
