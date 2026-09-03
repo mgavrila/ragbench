@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
+import type { Session } from "next-auth";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { projects } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
 
-type Session = { user: { id: string; organizationId: string } } | null;
+/**
+ * Just the part of the session these handlers read. Dropping `expires` keeps them callable from
+ * tests with a plain object while an `auth()` result still satisfies it structurally.
+ */
+type SessionLike = Pick<Session, "user"> | null;
 
-export async function listProjects(session: Session) {
+export async function listProjects(session: SessionLike) {
   if (!session?.user?.organizationId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -16,7 +21,7 @@ export async function listProjects(session: Session) {
   return NextResponse.json({ projects: rows });
 }
 
-export async function createProject(req: Request, session: Session) {
+export async function createProject(req: Request, session: SessionLike) {
   if (!session?.user?.organizationId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -29,9 +34,9 @@ export async function createProject(req: Request, session: Session) {
 }
 
 export async function GET() {
-  return listProjects((await auth()) as Session);
+  return listProjects(await auth());
 }
 
 export async function POST(req: Request) {
-  return createProject(req, (await auth()) as Session);
+  return createProject(req, await auth());
 }

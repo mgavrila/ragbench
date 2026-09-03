@@ -13,21 +13,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const password = String(credentials?.password ?? "");
         const user = await verifyCredentials(email, password);
         if (!user) return null;
-        return { id: user.id, email, organizationId: user.organizationId } as any;
+        return { id: user.id, email, organizationId: user.organizationId };
       },
     }),
   ],
   callbacks: {
     jwt({ token, user }) {
       if (user) {
-        token.userId = (user as any).id;
-        token.organizationId = (user as any).organizationId;
+        token.userId = user.id;
+        token.organizationId = user.organizationId;
       }
       return token;
     },
     session({ session, token }) {
-      (session.user as any).id = token.userId;
-      (session.user as any).organizationId = token.organizationId;
+      if (token.userId) session.user.id = token.userId;
+      if (token.organizationId) session.user.organizationId = token.organizationId;
       return session;
     },
   },

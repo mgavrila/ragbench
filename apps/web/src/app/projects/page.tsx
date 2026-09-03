@@ -6,7 +6,7 @@ import { auth } from "@/auth";
 
 export default async function ProjectsPage() {
   const session = await auth();
-  const orgId = (session?.user as any)?.organizationId;
+  const orgId = session?.user?.organizationId;
   if (!orgId) redirect("/login");
 
   const rows = await getDb().select().from(projects).where(eq(projects.organizationId, orgId));
@@ -14,7 +14,7 @@ export default async function ProjectsPage() {
   async function create(formData: FormData) {
     "use server";
     const s = await auth();
-    const org = (s?.user as any)?.organizationId;
+    const org = s?.user?.organizationId;
     if (!org) redirect("/login");
     await getDb().insert(projects).values({ organizationId: org, name: String(formData.get("name")) });
     redirect("/projects");

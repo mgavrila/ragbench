@@ -4,3 +4,4 @@ dist/
 .env
 *.tsbuildinfo
 uploads/
+next-env.d.ts
