@@ -1,0 +1,11 @@
+{
+  "name": "ragbench",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": { "node": ">=22" }
+}
