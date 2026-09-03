@@ -90,4 +90,25 @@ describe("mockGenerateQa", () => {
     const out = mockGenerateQa(tiny, 5);
     expect(out.length).toBe(0);
   });
+
+  it("drops the leading mid-sentence fragment of a passage that starts inside the document", () => {
+    // samplePassages cuts on word boundaries, so a passage with start > 0 opens mid-sentence. The
+    // fragment here is 63 chars -- well past the 30-char floor -- so only the start offset can tell
+    // it apart from a real sentence.
+    const fragment = "quantity reached level 161 during the trial period of the study.";
+    const passage = {
+      text: `${fragment} Sentence 27 explains that the measured quantity reached level 189 during the trial.`,
+      start: 2404,
+    };
+
+    const out = mockGenerateQa(passage, 5);
+
+    expect(out.length).toBeGreaterThan(0);
+    for (const qa of out) {
+      expect(qa.answer).not.toBe(fragment);
+      expect(qa.quote).not.toBe(fragment);
+    }
+    // Same text at the head of the document keeps the sentence: only the offset makes it a fragment.
+    expect(mockGenerateQa({ text: passage.text, start: 0 }, 5)[0].answer).toBe(fragment);
+  });
 });

@@ -69,12 +69,20 @@ function sentenceSpans(text: string): Span[] {
  * Deterministic demo-mode Q&A generator: no LLM call, no randomness. Splits the passage into
  * sentences, keeps the first `n` sentences of at least 30 chars, and derives each Q&A pair
  * mechanically from the sentence text so results are fully reproducible.
+ *
+ * A passage that starts inside the document is cut at a word boundary, not a sentence one, so its
+ * first span is the tail of a sentence that began before the window ("quantity reached level 161
+ * during the trial period."). That tail is dropped: long enough tails clear the 30-char floor and
+ * would otherwise ship a mid-sentence fragment as the demo's gold answer. Dropping it also costs a
+ * genuine sentence on the rare passage that happens to start on a sentence boundary -- the passage
+ * still has the rest of its sentences to offer, so the cheap check wins over tracking boundaries.
  */
 export function mockGenerateQa(
   passage: { text: string; start: number },
   n: number,
 ): Array<{ question: string; answer: string; quote: string }> {
-  const spans = sentenceSpans(passage.text);
+  const allSpans = sentenceSpans(passage.text);
+  const spans = passage.start > 0 ? allSpans.slice(1) : allSpans;
   const out: Array<{ question: string; answer: string; quote: string }> = [];
   for (const span of spans) {
     if (out.length >= n) break;

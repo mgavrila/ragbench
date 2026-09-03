@@ -1,8 +1,8 @@
 import { and, eq, isNotNull } from "drizzle-orm";
 import { documents, makeUsageReporter, testQuestions, testSets } from "@ragbench/db";
 import {
-  CHEAP_LLM, buildGenerationPrompt, buildTrivialityGatePrompt, lookupLlmModel, makeLLM,
-  mockGenerateQa, normalizeWs, parseGateJson, parseQaJson, samplePassages, verifyQuote,
+  CHEAP_LLM, ProviderError, buildGenerationPrompt, buildTrivialityGatePrompt, lookupLlmModel,
+  makeLLM, mockGenerateQa, normalizeWs, parseGateJson, parseQaJson, samplePassages, verifyQuote,
   type LLMProvider,
 } from "@ragbench/core";
 import type { JobHandler } from "../queue";
@@ -14,6 +14,12 @@ const GATE_MAX_TOKENS = 64;
 
 type Passage = { text: string; start: number; end: number };
 type Doc = { id: string; text: string };
+
+/** A question is the same question only within the same document: two documents that share a
+ * sentence should each get their own question and their own gold span. */
+function questionKey(documentId: string, question: string): string {
+  return `${documentId}:${normalizeWs(question)}`;
+}
 
 /**
  * Interleaves each document's passages so consecutive questions come from different documents.
@@ -27,7 +33,7 @@ type Doc = { id: string; text: string };
  * derives the same layout in the same order and revisits the passages it already covered -- which
  * is what makes the caller's already-asked check able to recognise them.
  */
-function roundRobinPassages(docs: Doc[], target: number): Array<{ doc: Doc; passage: Passage }> {
+export function roundRobinPassages(docs: Doc[], target: number): Array<{ doc: Doc; passage: Passage }> {
   const quota = Math.ceil(target / docs.length);
   const perDoc = docs.map((doc) => ({ doc, passages: samplePassages(doc.text, quota) }));
   const out: Array<{ doc: Doc; passage: Passage }> = [];
@@ -59,11 +65,14 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
       return;
     }
 
+    // Ordered because the passage layout is positional: a retry must see the documents in the same
+    // order it did the first time, or the round-robin below shifts and the resume bookkeeping
+    // (which passages are already covered) no longer lines up with what was generated.
     const rows = await db.select().from(documents).where(and(
       eq(documents.projectId, set.projectId),
       eq(documents.status, "ready"),
       isNotNull(documents.text),
-    ));
+    )).orderBy(documents.createdAt, documents.id);
     // isNotNull is a SQL-level filter drizzle cannot reflect in the row type; re-assert it in TS.
     const docs: Doc[] = rows.flatMap((d) => (d.text === null ? [] : [{ id: d.id, text: d.text }]));
     if (docs.length === 0) {
@@ -76,16 +85,27 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
     // Resume: a retry after a crash mid-generation counts what already landed towards the target
     // and generates only the remainder, so questions never pile past `questionsTarget`. Questions
     // deleted during review are excluded, which lets the count reflect what the user actually kept.
-    const existing = await db.select({ question: testQuestions.question }).from(testQuestions)
+    const existing = await db.select({
+      documentId: testQuestions.documentId,
+      question: testQuestions.question,
+      goldStart: testQuestions.goldStart,
+    }).from(testQuestions)
       .where(and(eq(testQuestions.testSetId, testSetId), eq(testQuestions.status, "active")));
     const wanted = set.questionsTarget - existing.length;
 
     if (wanted > 0) {
-      // Questions already asked. A resume re-walks passages it has covered, and without this it
-      // would store the same question twice; it also rejects one question arising from two
-      // documents that share a sentence, since identical questions with different gold spans are
-      // ambiguous ground truth the evaluator cannot score.
-      const asked = new Set(existing.map((q) => normalizeWs(q.question)));
+      // Two pieces of resume bookkeeping, both derived from what is already stored.
+      // `asked` stops a re-walked passage from storing the same question twice. `coveredStarts`
+      // stops the re-walk from spending a generation call on that passage at all: a passage whose
+      // range already contains a gold span has been mined, so the resume moves on to passages the
+      // first attempt never reached. (A quote that also occurs earlier in the document resolves to
+      // that earlier span, which can mark the wrong passage covered -- the cost is skipping one
+      // passage, and the alternative is storing passage provenance we have no other use for.)
+      const asked = new Set(existing.map((q) => questionKey(q.documentId, q.question)));
+      const coveredStarts = new Map<string, number[]>();
+      for (const q of existing) {
+        coveredStarts.set(q.documentId, [...(coveredStarts.get(q.documentId) ?? []), q.goldStart]);
+      }
       const isMock = modelEntry.provider === "mock";
       const reporter = makeUsageReporter(db, organizationId);
       // Demo mode is a pure function over the passage: no provider, no key, no spend -- which is
@@ -94,46 +114,64 @@ export const generateTestsetHandler: JobHandler<{ testSetId: string; organizatio
       const gate: LLMProvider | null = isMock ? null : makeLLM(CHEAP_LLM, reporter, "testset-gate");
 
       let kept = 0;
-      for (const { doc, passage } of roundRobinPassages(docs, set.questionsTarget)) {
-        if (kept >= wanted) break;
-
-        // ProviderErrors from here on are deliberately not caught: a retryable one (rate limit,
-        // transient) must reach pg-boss so the job is retried and resumes from what was inserted.
-        const candidates = generator
-          ? parseQaJson(await generator.complete({
-              prompt: buildGenerationPrompt(passage.text, 1), maxTokens: GENERATION_MAX_TOKENS,
-            }))
-          : mockGenerateQa(passage, 1);
-
-        for (const candidate of candidates) {
+      try {
+        for (const { doc, passage } of roundRobinPassages(docs, set.questionsTarget)) {
           if (kept >= wanted) break;
-          // Ground truth is extractive by construction: a quote the generator invented or
-          // paraphrased has no span in the document and the question is dropped rather than
-          // stored with a made-up answer. The span is resolved against the whole document (not
-          // the passage) because that is the coordinate system the evaluator scores against.
-          const span = verifyQuote(doc.text, candidate.quote);
-          if (!span) continue;
-          const key = normalizeWs(candidate.question);
-          if (asked.has(key)) continue;
+          const covered = coveredStarts.get(doc.id)
+            ?.some((start) => start >= passage.start && start < passage.end);
+          if (covered) continue;
 
-          if (gate) {
-            const verdict = parseGateJson(await gate.complete({
-              prompt: buildTrivialityGatePrompt(candidate.question, candidate.quote),
-              maxTokens: GATE_MAX_TOKENS,
-            }));
-            // Fails open: an unparseable verdict keeps the question, since a gate outage should
-            // cost the user a few weak questions, not the whole test set.
-            if (verdict === true) continue;
+          const candidates = generator
+            ? parseQaJson(await generator.complete({
+                prompt: buildGenerationPrompt(passage.text, 1), maxTokens: GENERATION_MAX_TOKENS,
+              }))
+            : mockGenerateQa(passage, 1);
+
+          for (const candidate of candidates) {
+            if (kept >= wanted) break;
+            // Ground truth is extractive by construction: a quote the generator invented or
+            // paraphrased has no span in the document and the question is dropped rather than
+            // stored with a made-up answer. The span is resolved against the whole document (not
+            // the passage) because that is the coordinate system the evaluator scores against.
+            const span = verifyQuote(doc.text, candidate.quote);
+            if (!span) continue;
+            const key = questionKey(doc.id, candidate.question);
+            if (asked.has(key)) continue;
+
+            if (gate) {
+              const verdict = parseGateJson(await gate.complete({
+                prompt: buildTrivialityGatePrompt(candidate.question, candidate.quote),
+                maxTokens: GATE_MAX_TOKENS,
+              }));
+              // Fails open: an unparseable verdict keeps the question, since a gate outage should
+              // cost the user a few weak questions, not the whole test set.
+              if (verdict === true) continue;
+            }
+
+            // Inserted one at a time, as they are verified: this is what a retry resumes from.
+            await db.insert(testQuestions).values({
+              testSetId, documentId: doc.id, question: candidate.question,
+              goldAnswer: candidate.answer, goldStart: span.start, goldEnd: span.end,
+            });
+            asked.add(key);
+            kept++;
           }
-
-          // Inserted one at a time, as they are verified: this is what a retry resumes from.
-          await db.insert(testQuestions).values({
-            testSetId, documentId: doc.id, question: candidate.question,
-            goldAnswer: candidate.answer, goldStart: span.start, goldEnd: span.end,
-          });
-          asked.add(key);
-          kept++;
         }
+      } catch (err) {
+        // Provider failures split by whether another attempt could plausibly succeed. A rate limit
+        // or a transient network fault is rethrown so pg-boss retries and the resume path above
+        // picks up whatever was already inserted. An auth or fatal error (missing key, model
+        // rejecting the request) cannot be retried into success, so it is attributed to the set --
+        // otherwise three silent retries end with the set stuck in "generating" forever and no
+        // explanation in the UI. Questions already inserted are verified ground truth and stay.
+        // Anything that is not a ProviderError (a DB fault, a bug here) propagates untouched.
+        if (err instanceof ProviderError && !err.retryable) {
+          await db.update(testSets)
+            .set({ status: "failed", error: err.message })
+            .where(eq(testSets.id, testSetId));
+          return;
+        }
+        throw err;
       }
     }
 

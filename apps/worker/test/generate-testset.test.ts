@@ -3,8 +3,8 @@ import { and, eq } from "drizzle-orm";
 import {
   createDb, organizations, projects, documents, testSets, testQuestions, usageLog,
 } from "@ragbench/db";
-import { normalizeWs } from "@ragbench/core";
-import { generateTestsetHandler } from "../src/handlers/generate-testset";
+import { normalizeWs, samplePassages } from "@ragbench/core";
+import { generateTestsetHandler, roundRobinPassages } from "../src/handlers/generate-testset";
 
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 let ctx: ReturnType<typeof createDb>;
@@ -17,11 +17,14 @@ const noopBoss = { async send() { return "job-1"; } } as never;
  * Long enough (>1200 chars, the default passage window) that samplePassages returns more than one
  * passage per document -- otherwise a short document is a single passage and the round-robin across
  * documents has nothing to alternate over. Every sentence clears mockGenerateQa's 30-char floor.
+ * Sentence lengths deliberately vary (the trailing clause repeats 0-2 times), so the passage
+ * windows land mid-sentence rather than tidily on a sentence boundary: that is what exercises the
+ * well-formedness assertion on gold answers below.
  */
 function longText(topic: string, sentences = 24): string {
-  return Array.from(
-    { length: sentences },
-    (_, i) => `The ${topic} report section ${i} records that measurement number ${i} was observed by the field team.`,
+  return Array.from({ length: sentences }, (_, i) =>
+    `The ${topic} report section ${i} records that measurement ${i * 137} was observed by the field team`
+    + `${" and reviewed by the reviewer".repeat(i % 3)}.`,
   ).join(" ");
 }
 
@@ -60,6 +63,38 @@ beforeAll(async () => {
 });
 afterAll(async () => { await ctx.pool.end(); });
 
+describe("roundRobinPassages", () => {
+  it("alternates documents rather than draining one at a time", () => {
+    const docs = [{ id: "A", text: longText("alpha") }, { id: "B", text: longText("beta") }];
+
+    const emitted = roundRobinPassages(docs, 6).map((p) => p.doc.id);
+
+    expect(emitted.length).toBeGreaterThanOrEqual(4);
+    expect(emitted.slice(0, 4)).toEqual(["A", "B", "A", "B"]);
+  });
+
+  it("keeps the alternation when one document runs out of passages", () => {
+    // "B" fits in a single passage window, so after the first round only "A" has passages left.
+    const docs = [{ id: "A", text: longText("alpha") }, { id: "B", text: "One short document." }];
+
+    const emitted = roundRobinPassages(docs, 6).map((p) => p.doc.id);
+
+    expect(emitted[0]).toBe("A");
+    expect(emitted[1]).toBe("B");
+    expect(emitted.slice(2).every((id) => id === "A")).toBe(true);
+  });
+
+  it("gives each document a share of the target rather than the whole of it", () => {
+    const docs = [{ id: "A", text: longText("alpha", 200) }, { id: "B", text: longText("beta", 200) }];
+
+    const emitted = roundRobinPassages(docs, 4);
+
+    // Quota is ceil(4 / 2) = 2 passages per document from these long texts, not 4 each.
+    expect(emitted.filter((p) => p.doc.id === "A")).toHaveLength(2);
+    expect(emitted.filter((p) => p.doc.id === "B")).toHaveLength(2);
+  });
+});
+
 describe("generateTestsetHandler", () => {
   it("generates verified questions across documents and marks the set ready", async () => {
     const projectId = await seedProject("gts-happy", [longText("alpha"), longText("beta")]);
@@ -86,11 +121,16 @@ describe("generateTestsetHandler", () => {
       expect(row.goldEnd).toBeLessThanOrEqual(docText.length);
       expect(normalizeWs(docText.slice(row.goldStart, row.goldEnd))).toBe(normalizeWs(row.goldAnswer));
       expect(row.question.length).toBeGreaterThan(0);
+      // Well-formedness: a gold answer starts where a sentence starts. Passages are cut on word
+      // boundaries, so without care the passage that opens mid-sentence contributes its leading
+      // fragment ("quantity reached level 161 during the trial.") as ground truth.
+      const preceding = docText.slice(0, row.goldStart).trimEnd();
+      expect(preceding === "" || /[.!?]$/.test(preceding)).toBe(true);
     }
 
-    // Demo generation is a pure function: it must never bill the org against a real provider.
+    // The demo generator never calls a provider, so generation bills nothing for this set.
     const usage = await ctx.db.select().from(usageLog).where(eq(usageLog.organizationId, orgId));
-    expect(usage.every((u) => u.provider === "mock")).toBe(true);
+    expect(usage.filter((u) => u.purpose === "testset" || u.purpose === "testset-gate")).toHaveLength(0);
   });
 
   it("is a no-op on retry once the set is ready", async () => {
@@ -130,7 +170,9 @@ describe("generateTestsetHandler", () => {
 
   it("generates nothing when the target is already met", async () => {
     const projectId = await seedProject("gts-met", [longText("eta")]);
-    const testSetId = await makeSet(projectId, 2);
+    // A real model with no API key configured: reaching the generator at all would throw, so the
+    // set turning ready is proof that a met target short-circuits before any provider call.
+    const testSetId = await makeSet(projectId, 2, "claude-opus-5");
     const [doc] = await ctx.db.select().from(documents).where(eq(documents.projectId, projectId));
     for (let i = 0; i < 3; i++) {
       await ctx.db.insert(testQuestions).values({
@@ -174,6 +216,71 @@ describe("generateTestsetHandler", () => {
     const set = await loadSet(testSetId);
     expect(set.status).toBe("failed");
     expect(set.error).toContain("no-such-model");
+  });
+
+  it("gives every document its own questions even when two documents are identical", async () => {
+    // Parsing marks a re-uploaded file "duplicate", but two ready documents can still hold the
+    // same text (different files, same content, seeded here directly). The demo generator derives
+    // its question from the sentence, so both documents produce the exact same question strings --
+    // they are still different documents with their own gold spans and must both be represented.
+    const shared = longText("iota");
+    const projectId = await seedProject("gts-twins", [shared, shared]);
+    const testSetId = await makeSet(projectId, 6);
+
+    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+
+    const rows = await activeQuestions(testSetId);
+    expect(new Set(rows.map((r) => r.documentId)).size).toBe(2);
+  });
+
+  it("resumes onto passages the first attempt never reached", async () => {
+    const text = longText("kappa");
+    const projectId = await seedProject("gts-covered", [text]);
+    const testSetId = await makeSet(projectId, 6);
+    const [doc] = await ctx.db.select().from(documents).where(eq(documents.projectId, projectId));
+
+    // The layout the handler will derive: one document, so the quota is the whole target.
+    const passages = samplePassages(text, 6);
+    expect(passages.length).toBeGreaterThanOrEqual(2);
+
+    // A question already covering the first passage, as if a previous attempt had mined it.
+    await ctx.db.insert(testQuestions).values({
+      testSetId, documentId: doc.id, question: "seeded?", goldAnswer: text.slice(0, 40),
+      goldStart: 0, goldEnd: 40,
+    });
+
+    await generateTestsetHandler({ testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss });
+
+    const generated = (await activeQuestions(testSetId)).filter((r) => r.question !== "seeded?");
+    expect(generated.length).toBeGreaterThan(0);
+    for (const row of generated) {
+      expect(row.goldStart).toBeGreaterThanOrEqual(passages[1].start);
+    }
+  });
+
+  it("marks the set failed when the provider fails in a way a retry cannot fix", async () => {
+    const projectId = await seedProject("gts-authfail", [longText("lambda")]);
+    const testSetId = await makeSet(projectId, 2, "claude-opus-5");
+
+    const saved = { key: process.env.ANTHROPIC_API_KEY, token: process.env.ANTHROPIC_AUTH_TOKEN };
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+    try {
+      // With no credentials the SDK rejects before any request goes out, which the provider layer
+      // reports as a non-retryable ProviderError -- the class that must land on the set rather
+      // than burn three pg-boss retries and leave it stuck in "generating".
+      await expect(generateTestsetHandler(
+        { testSetId, organizationId: orgId }, { db: ctx.db, boss: noopBoss },
+      )).resolves.toBeUndefined();
+    } finally {
+      if (saved.key !== undefined) process.env.ANTHROPIC_API_KEY = saved.key;
+      if (saved.token !== undefined) process.env.ANTHROPIC_AUTH_TOKEN = saved.token;
+    }
+
+    const set = await loadSet(testSetId);
+    expect(set.status).toBe("failed");
+    expect(set.error).toBeTruthy(); // the provider's own message, not asserted verbatim
+    expect(await activeQuestions(testSetId)).toHaveLength(0);
   });
 
   it("resolves without throwing when the test set is gone", async () => {
