@@ -28,6 +28,9 @@ importers:
       next-auth:
         specifier: 5.0.0-beta.32
         version: 5.0.0-beta.32(next@16.3.4(@types/node@26.4.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
+      pg-boss:
+        specifier: ^12.29.0
+        version: 12.29.0
       react:
         specifier: ^19.2.8
         version: 19.2.8
