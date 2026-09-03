@@ -59,4 +59,22 @@ describe("parseHandler", () => {
   it("is a no-op for unknown document ids", async () => {
     await expect(parseHandler({ documentId: "00000000-0000-0000-0000-000000000000" }, { db: ctx.db, boss: null as never })).resolves.toBeUndefined();
   });
+
+  it("propagates a DB error after successful extraction instead of mislabeling it a parse failure", async () => {
+    const doc = await makeDoc("sample.md", "text/markdown", "sample.md");
+    // Extraction succeeds; only the ready-update call fails. This must reject the handler (so
+    // pg-boss retries the job) rather than being caught and written as status:"failed" -- a
+    // transient DB error is not the same as a bad file.
+    const failingDb = new Proxy(ctx.db, {
+      get(target, prop, receiver) {
+        if (prop === "update") throw new Error("simulated transient db error");
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    await expect(
+      parseHandler({ documentId: doc.id }, { db: failingDb, boss: null as never }),
+    ).rejects.toThrow("simulated transient db error");
+    const [row] = await ctx.db.select().from(documents).where(eq(documents.id, doc.id));
+    expect(row.status).toBe("parsing"); // unchanged -- not mislabeled "failed"
+  });
 });

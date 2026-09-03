@@ -62,6 +62,9 @@ importers:
       '@ragbench/db':
         specifier: workspace:*
         version: link:../../packages/db
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.23.1)(pg@8.23.0)
       pg-boss:
         specifier: ^12.29.0
         version: 12.29.0
@@ -69,9 +72,6 @@ importers:
         specifier: ^1.8.1
         version: 1.8.1
     devDependencies:
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@types/pg@8.23.1)(pg@8.23.0)
       tsx:
         specifier: ^4.23.13
         version: 4.23.13
