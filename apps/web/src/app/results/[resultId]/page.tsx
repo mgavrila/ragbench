@@ -61,7 +61,17 @@ export default async function ResultPage({ params }: { params: Promise<{ resultI
     : null;
 
   return (
-    <AppShell>
+    // The rail's link back to the run is deliberately not called "Back to run": the page body
+    // already has a link by that name, and two links with one accessible name is one ambiguous
+    // target for a screen reader (and for the e2e suite that resolves it).
+    <AppShell
+      crumbs={[
+        { href: "/projects", label: "Projects" },
+        { href: `/runs/${result.runId}`, label: `Run ${result.runId.slice(0, 8)}` },
+        { href: `/results/${resultId}`, label: "Evidence" },
+      ]}
+      context={{ label: "Evidence", subject: question.question, items: [{ href: `/runs/${result.runId}`, label: "Run grid" }] }}
+    >
       <EvidenceClient
         resultId={resultId}
         runId={result.runId}

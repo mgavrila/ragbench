@@ -16,7 +16,24 @@ export default async function ProjectPage({ params }: { params: Promise<{ projec
   if (!project) notFound();
 
   return (
-    <AppShell>
+    <AppShell
+      crumbs={[
+        { href: "/projects", label: "Projects" },
+        { href: `/projects/${projectId}`, label: project.name },
+      ]}
+      context={{
+        label: "Project",
+        subject: project.name,
+        // The project page is one long workspace rather than four routes, so the rail's context
+        // group is a table of contents for it. The ids these point at are on the <section>s the
+        // three clients render.
+        items: [
+          { href: "#corpus", label: "Corpus" },
+          { href: "#test-sets", label: "Test sets" },
+          { href: "#evaluation", label: "Evaluation" },
+        ],
+      }}
+    >
       <PageHeader
         eyebrow="Project"
         title={project.name}

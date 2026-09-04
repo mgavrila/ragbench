@@ -176,7 +176,7 @@ export function EvalClient({ projectId }: { projectId: string }) {
         </Notice>
       ) : null}
 
-      <section className={cls.section}>
+      <section className={cls.section} id="evaluation">
         <SectionHead
           title="RAG configs"
           hint="One chunk set plus an embedding model and a top-k cutoff. A run compares several of these side by side."

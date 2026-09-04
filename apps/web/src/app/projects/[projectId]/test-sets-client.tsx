@@ -88,7 +88,7 @@ export function TestSetsClient({ projectId }: { projectId: string }) {
   }
 
   return (
-    <section className={cls.section}>
+    <section className={cls.section} id="test-sets">
       <SectionHead
         title="Test sets"
         hint="Questions generated from the corpus, each with a gold answer span in its source document."

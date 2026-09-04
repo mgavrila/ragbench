@@ -95,7 +95,7 @@ export function CorpusClient({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      <section className={cls.section}>
+      <section className={cls.section} id="corpus">
         <SectionHead
           title="Documents"
           hint={documents.length > 0 ? `${documents.length} uploaded` : undefined}

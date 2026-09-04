@@ -38,8 +38,8 @@ const POLL_TIMEOUT_MS = 30000;
  * swatch has to match the marks in the document exactly, and a copied hex would drift. */
 const GOLD_FILL = "var(--rb-gold)";
 const GOLD_LINE = "var(--rb-gold-line)";
-/** The tint over chunks the diagnosis actually leaned on. Amber at 12% -- readable text over it. */
-const EVIDENCE_TINT = "rgba(154,103,0,0.12)";
+/** The tint over chunks the diagnosis actually leaned on, defined once in globals.css. */
+const EVIDENCE_TINT = "var(--rb-evidence)";
 
 export type Segment = {
   start: number;
@@ -235,9 +235,13 @@ export function EvidenceClient({
     : [];
 
   return (
-    <div>
-      <p style={{ marginBottom: 12 }}>
-        <Link href={`/runs/${runId}`}>&larr; Back to run</Link>
+    // One reading column for the whole page: the document sets the measure and the diagnosis,
+    // the matrix and the legend align to it, so nothing floats in half-empty full-width cards.
+    <div className={cls.reading}>
+      <p style={{ marginBottom: 16 }}>
+        <Link href={`/runs/${runId}`} className={cls.btnSm}>
+          &larr; Back to run
+        </Link>
       </p>
 
       <div className="rb-page-header">
@@ -245,8 +249,9 @@ export function EvidenceClient({
           <span className={cls.eyebrow}>Evidence</span>
           <h1>{question.question}</h1>
           <div className="rb-page-header__meta">
-            Gold answer: <strong style={{ fontWeight: 600, color: "var(--rb-text)" }}>{question.goldAnswer}</strong>
-            {" · "}
+            Gold answer:{" "}
+            <strong style={{ fontWeight: 600, color: "var(--rb-text)" }}>{question.goldAnswer}</strong>
+            <span className={cls.dotSep}> · </span>
             <span className={cls.mono}>{doc.filename ?? "(unknown document)"}</span>
           </div>
         </div>
@@ -256,7 +261,7 @@ export function EvidenceClient({
         <SectionHead title="Diagnosis" />
         {attribution ? (
           <div className={cls.cardPad}>
-            <div className={cls.row} style={{ marginBottom: 12 }}>
+            <div className={cls.diagnosisHead}>
               <StatusBadge
                 status={attribution.verdict}
                 tone={VERDICT_TONE[attribution.verdict]}
@@ -264,10 +269,10 @@ export function EvidenceClient({
               />
               <code className={cls.code}>{attribution.counterfactuals.rule}</code>
             </div>
-            <p style={{ maxWidth: "70ch" }}>
+            <p className={cls.diagnosisProse}>
               {attribution.explanation ?? <span className={cls.muted}>explanation unavailable</span>}
             </p>
-            <div style={{ marginTop: 16 }}>
+            <div style={{ marginTop: 20 }}>
               <span className={cls.eyebrow}>Signals</span>
               <SignalsBlock signals={attribution.counterfactuals.signals} />
             </div>

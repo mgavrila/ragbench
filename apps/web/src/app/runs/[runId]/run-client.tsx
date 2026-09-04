@@ -8,7 +8,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "@/components/empty-state";
 import { DataTable } from "@/components/data-table";
 import { Notice } from "@/components/notice";
-import { cellTone, cls, cx, state, VERDICT_TONE } from "@/lib/ui";
+import { cellTone, cellVars, cls, cx, state, VERDICT_TONE } from "@/lib/ui";
 
 type RunDetail = {
   id: string;
@@ -306,15 +306,15 @@ export function RunClient({ runId }: { runId: string }) {
         eyebrow="Run"
         title={<span className={cls.mono} style={{ fontSize: 20 }}>{run.id.slice(0, 8)}</span>}
         meta={
-          <span className={cls.row} style={{ gap: 8 }}>
+          <span className={cls.row} style={{ gap: 10 }}>
             <StatusBadge status={run.status} />
-            <span>·</span>
+            <span className={cls.dotSep}>·</span>
             <span>{run.mode}</span>
-            <span>·</span>
+            <span className={cls.dotSep}>·</span>
             <span>judge {run.judgeModel ?? "—"}</span>
             {run.mode === "full" ? (
               <>
-                <span>·</span>
+                <span className={cls.dotSep}>·</span>
                 <span>answer {run.answerModel ?? "(same as judge)"}</span>
               </>
             ) : null}
@@ -328,9 +328,11 @@ export function RunClient({ runId }: { runId: string }) {
       />
 
       {run.totalJobs > 0 ? (
-        <p className={cls.row} style={{ marginBottom: 24 }}>
+        <p className={cls.row} style={{ marginBottom: 28 }}>
+          {/* The bar breathes only while there is still work to do -- an idle pulse over a finished
+              run would say "still moving" about a number that has stopped. */}
           <progress
-            className={cls.progress}
+            className={cx(cls.progress, !TERMINAL_STATUSES.has(run.status) && cls.progressLive)}
             value={run.completedJobs}
             max={run.totalJobs}
             aria-label="Run progress"
@@ -401,7 +403,14 @@ export function RunClient({ runId }: { runId: string }) {
         >
           {grid.map((row) => (
             <tr key={row.questionId}>
-              <td className={cls.gridQuestion}>{row.question}</td>
+              <td className={cls.gridQuestion}>
+                {/* One line, ellipsised, full text on hover: uniform row heights are what let the
+                    matrix be read as a matrix. The cell buttons carry the question in their own
+                    aria-label, so nothing is lost when the text is clipped visually. */}
+                <span className={cls.gridText} title={row.question}>
+                  {row.question}
+                </span>
+              </td>
               {configs.map((c) => {
                 const cell = row.perConfig[c.config.id];
                 const isSelected =
@@ -413,7 +422,7 @@ export function RunClient({ runId }: { runId: string }) {
                         type="button"
                         onClick={() => openCell(c.config.id, row.questionId)}
                         className={cx(cls.cell, isSelected && cls.cellSelected)}
-                        style={{ background: state[cellTone(cell)] }}
+                        style={cellVars(cellTone(cell))}
                         aria-pressed={isSelected}
                         aria-label={`${c.config.name}: ${cellText(cell)} — ${truncate(row.question, 80)}`}
                       >

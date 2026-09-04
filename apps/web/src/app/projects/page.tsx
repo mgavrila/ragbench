@@ -30,7 +30,7 @@ export default async function ProjectsPage() {
   }
 
   return (
-    <AppShell>
+    <AppShell crumbs={[{ href: "/projects", label: "Projects" }]}>
       <PageHeader
         title="Projects"
         meta={`${rows.length} project${rows.length === 1 ? "" : "s"} in your organization`}

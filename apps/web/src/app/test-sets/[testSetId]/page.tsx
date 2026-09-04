@@ -37,7 +37,14 @@ export default async function TestSetPage({ params }: { params: Promise<{ testSe
   if (!row || row.organizationId !== session.user.organizationId) notFound();
 
   return (
-    <AppShell>
+    <AppShell
+      crumbs={[
+        { href: "/projects", label: "Projects" },
+        { href: `/projects/${row.projectId}`, label: "Project" },
+        { href: `/test-sets/${testSetId}`, label: row.name },
+      ]}
+      context={{ label: "Test set", subject: row.name, items: [{ href: `/projects/${row.projectId}`, label: "Project overview" }] }}
+    >
       <QuestionsClient
         testSetId={testSetId}
         initialTestSet={{

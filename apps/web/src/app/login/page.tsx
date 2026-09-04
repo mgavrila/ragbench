@@ -33,7 +33,12 @@ export default async function LoginPage({
   return (
     <main className="rb-auth">
       <div className="rb-auth__card">
-        <span className={cls.eyebrow}>RAGBench</span>
+        <Link href="/" className={cls.authBrand}>
+          <span className={cls.brandMark} aria-hidden="true">
+            [
+          </span>
+          RAGBench
+        </Link>
         <h1>Log in</h1>
         {error ? <Notice>Invalid email or password.</Notice> : null}
         <form action={login} className="rb-auth__form">

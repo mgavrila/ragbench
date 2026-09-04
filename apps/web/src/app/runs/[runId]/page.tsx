@@ -21,7 +21,12 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   // aggregates) is fetched client-side by RunClient from the same endpoint the poll re-hits, so
   // this check only decides whether the page exists at all.
   const [row] = await getDb()
-    .select({ id: evalRuns.id, organizationId: projects.organizationId })
+    .select({
+      id: evalRuns.id,
+      projectId: evalRuns.projectId,
+      projectName: projects.name,
+      organizationId: projects.organizationId,
+    })
     .from(evalRuns)
     .innerJoin(projects, eq(projects.id, evalRuns.projectId))
     .where(eq(evalRuns.id, runId));
@@ -31,7 +36,15 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
   // `wide`: the question grid gains a column per config, so this page gets the wider content
   // column while every other page keeps the reading-width default.
   return (
-    <AppShell wide>
+    <AppShell
+      wide
+      crumbs={[
+        { href: "/projects", label: "Projects" },
+        { href: `/projects/${row.projectId}`, label: row.projectName },
+        { href: `/runs/${runId}`, label: `Run ${runId.slice(0, 8)}` },
+      ]}
+      context={{ label: "Run", subject: runId.slice(0, 8), items: [{ href: `/projects/${row.projectId}`, label: "Project overview" }] }}
+    >
       <RunClient runId={runId} />
     </AppShell>
   );

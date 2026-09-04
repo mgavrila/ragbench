@@ -43,7 +43,12 @@ export default async function SignupPage({
   return (
     <main className="rb-auth">
       <div className="rb-auth__card">
-        <span className={cls.eyebrow}>RAGBench</span>
+        <Link href="/" className={cls.authBrand}>
+          <span className={cls.brandMark} aria-hidden="true">
+            [
+          </span>
+          RAGBench
+        </Link>
         <h1>Create an account</h1>
         {error ? (
           <Notice>
