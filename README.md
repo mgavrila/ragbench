@@ -15,11 +15,13 @@ The whole thing runs keyless: sign up, pick the built-in mock LLM and mock embed
 
 ## Quickstart (5 minutes, no API keys)
 
+Prerequisites: Docker, Node.js ≥ 22, and pnpm 11 (`corepack enable` installs the pinned version automatically).
+
 ```bash
-git clone <this-repo>
+git clone https://github.com/mgavrila/ragbench.git
 cd ragbench
 
-# 1. Start Postgres (pgvector) only — this compose file does not start the app or worker.
+# 1. Start Postgres (pgvector) only, on host port 5433 — this compose file does not start the app or worker.
 docker compose up -d
 
 # 2. Install and migrate
@@ -35,7 +37,7 @@ pnpm --filter web dev
 
 Open **http://localhost:3000**, sign up (first account, no invite needed), create a project, upload a document, and generate a test set. When picking an LLM and embedding model, choose **mock-llm** and **mock-embedding** — both work with no provider API key and cost nothing. Run an eval, then click **Diagnose** on any missed question to see the verdict and evidence view.
 
-> `pnpm --filter web dev` runs `next dev` (the web app's package is named `@ragbench/web`, but pnpm's `--filter` also matches the unscoped `web`), serving on **port 3000** by default.
+> `pnpm --filter web dev` runs `next dev` (the web app's package is named `@ragbench/web`, but pnpm's `--filter` also matches the unscoped `web`), serving on **port 3000** by default. If 3000 is already taken, Next picks the next free port and prints it — check the terminal output for the actual URL.
 
 ## Screenshots
 
