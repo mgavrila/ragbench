@@ -39,11 +39,11 @@ describe("decideVerdict", () => {
       rule: "nothing-hits",
     },
     {
-      name: "rule 1 does not fire when bestGoldRank is null, even with a topk hit",
+      name: "rule 1 does not fire when bestGoldRank is null, even with a topk hit (rule 2a also needs bestGoldRank !== null, so this falls to rule 4)",
       signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
       counterfactuals: [cf("topk", true, 2)],
-      verdict: "chunking",
-      rule: "gold-straddles-chunks",
+      verdict: "unanswerable",
+      rule: "nothing-hits",
     },
     {
       name: "rule 1 does not fire without any topk counterfactual hit, even past k",
@@ -61,49 +61,55 @@ describe("decideVerdict", () => {
     },
 
     // --- Rule 2: chunking (spec §7.3 row 1) ---
+    // Note: a genuine straddle (rule 2a) requires bestGoldRank !== null -- some chunk partially
+    // overlaps gold, so it appears in the ordering. goldInSingleChunk implies bestGoldRank !== null
+    // too (see the type's invariant), so every case below uses a non-null rank.
     {
-      name: "rule 2a: gold span straddles a chunk boundary",
-      signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
+      name: "rule 2a: gold span straddles a chunk boundary (some chunk partially overlaps, none contains it whole)",
+      signals: { goldInSingleChunk: false, bestGoldRank: 2, k: 3 },
       counterfactuals: [],
       verdict: "chunking",
       rule: "gold-straddles-chunks",
     },
     {
       name: "rule 2b: gold intact in one chunk, but a chunker counterfactual hits",
-      signals: { goldInSingleChunk: true, bestGoldRank: null, k: 3 },
+      signals: { goldInSingleChunk: true, bestGoldRank: 2, k: 3 },
+      counterfactuals: [cf("chunker", true, 2)],
+      verdict: "chunking",
+      rule: "chunker-counterfactual-hits",
+    },
+    {
+      name: "rule 2b applies even when bestGoldRank is null: gold isn't covered by this set's chunks at all, but a different chunker's set does cover it",
+      signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
       counterfactuals: [cf("chunker", true, 2)],
       verdict: "chunking",
       rule: "chunker-counterfactual-hits",
     },
     {
       name: "collision: straddling + chunker-hit -> chunking via the straddle branch (2a checked before 2b)",
-      signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
+      signals: { goldInSingleChunk: false, bestGoldRank: 2, k: 3 },
       counterfactuals: [cf("chunker", true, 2)],
       verdict: "chunking",
       rule: "gold-straddles-chunks",
     },
     {
       name: "rule 2 outranks rule 3: straddling chunks even with an embedder counterfactual hit",
-      signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
+      signals: { goldInSingleChunk: false, bestGoldRank: 2, k: 3 },
       counterfactuals: [cf("embedder", true, 2)],
       verdict: "chunking",
       rule: "gold-straddles-chunks",
     },
 
     // --- Rule 3: embedding (spec §7.3 row 2) ---
+    // goldInSingleChunk implies bestGoldRank !== null, so every case below uses a non-null rank; the
+    // old "bestGoldRank === null" arm of rule 3 was deleted as dead code (see decideVerdict's
+    // AMENDMENT comment) since that combination can never occur in a valid input.
     {
       name: "rule 3a: gold intact, an embedder counterfactual hits (collision: intact + embedder hit -> embedding)",
-      signals: { goldInSingleChunk: true, bestGoldRank: null, k: 3 },
+      signals: { goldInSingleChunk: true, bestGoldRank: 5, k: 3 },
       counterfactuals: [cf("embedder", true, 2)],
       verdict: "embedding",
       rule: "embedder-counterfactual-hits",
-    },
-    {
-      name: "rule 3b boundary: gold intact, bestGoldRank null, zero counterfactual hits anywhere -> embedding, not unanswerable (rule 3 fires before rule 4)",
-      signals: { goldInSingleChunk: true, bestGoldRank: null, k: 3 },
-      counterfactuals: [],
-      verdict: "embedding",
-      rule: "gold-intact-not-ranked",
     },
     {
       name: "rule 3b: gold intact, bestGoldRank past k, no embedder hit, no topk hit",
@@ -114,10 +120,29 @@ describe("decideVerdict", () => {
     },
     {
       name: "rule 3 embedder-hit branch is checked before the gold-intact-not-ranked branch",
-      signals: { goldInSingleChunk: true, bestGoldRank: null, k: 3 },
+      signals: { goldInSingleChunk: true, bestGoldRank: 9, k: 3 },
       counterfactuals: [cf("embedder", true, 1), cf("chunker", false)],
       verdict: "embedding",
       rule: "embedder-counterfactual-hits",
+    },
+
+    // --- Rule 4: unanswerable (spec §7.3 row 4) ---
+    // Fixed post round-1: previously unreachable (see decideVerdict's AMENDMENT comment). Now the true
+    // fallback -- gold isn't covered by any chunk in this set (bestGoldRank null) and nothing tried,
+    // of any kind, recovers it.
+    {
+      name: "rule 4: bestGoldRank null and no counterfactual hits anywhere -> unanswerable",
+      signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
+      counterfactuals: [],
+      verdict: "unanswerable",
+      rule: "nothing-hits",
+    },
+    {
+      name: "rule 3/rule 4 boundary: gold intact, bestGoldRank within k, no hits anywhere -> falls to the literal fallback (precondition violation: this input isn't actually a failure)",
+      signals: { goldInSingleChunk: true, bestGoldRank: 3, k: 3 },
+      counterfactuals: [],
+      verdict: "unanswerable",
+      rule: "nothing-hits",
     },
   ];
 
@@ -126,21 +151,6 @@ describe("decideVerdict", () => {
       expect(decideVerdict(signals, counterfactuals)).toEqual({ verdict, rule });
     });
   }
-
-  describe("rule 4 fallback (spec §7.3 row 4, 'nothing-hits')", () => {
-    // decideVerdict is only meaningful when called on an already-failed run (the original config did
-    // not hit gold within k). Given that precondition, rule 4 is UNREACHABLE: rule 2 unconditionally
-    // claims every !goldInSingleChunk input as "chunking", and rule 3 unconditionally claims every
-    // goldInSingleChunk input where bestGoldRank is null OR past k as "embedding" -- which together
-    // cover every failing input. The literal fallback is only reachable by feeding decideVerdict a
-    // NON-failure (bestGoldRank !== null && bestGoldRank <= k), which is a precondition violation, not
-    // a genuine "nothing hits anywhere" case. Kept and tested here for completeness/auditability; see
-    // task-1-report.md for the full analysis and a recommendation for the team to resolve.
-    it("is reached (as a precondition-violation, not a genuine miss) when fed a non-failure input", () => {
-      const signals: AttributionSignals = { goldInSingleChunk: true, bestGoldRank: 3, k: 3 };
-      expect(decideVerdict(signals, [])).toEqual({ verdict: "unanswerable", rule: "nothing-hits" });
-    });
-  });
 });
 
 describe("buildExplanationPrompt", () => {

@@ -7,11 +7,16 @@
  */
 
 export type AttributionSignals = {
-  /** Whether the gold answer span lies entirely within a single chunk (vs. split across a boundary). */
+  /**
+   * Whether the gold answer span lies entirely within a single chunk (vs. split across a boundary).
+   * Invariant: goldInSingleChunk implies bestGoldRank !== null -- a chunk that contains the whole
+   * span also overlaps it, so it necessarily appears (at some rank) in the full ordering below.
+   */
   goldInSingleChunk: boolean;
   /**
    * 1-based rank of the best gold-overlapping chunk in the FULL retrieval ordering (not capped to k).
-   * null means no chunk in the set overlaps the gold span at all.
+   * null means no chunk in the set overlaps the gold span at all (which also means goldInSingleChunk
+   * must be false -- see the invariant above).
    */
   bestGoldRank: number | null;
   /** The top-k cutoff actually used by the run being diagnosed. */
@@ -43,6 +48,18 @@ function anyHit(counterfactuals: Counterfactual[], kind: Counterfactual["kind"])
  *
  * Precondition: intended to be called only on a run that already missed gold within k (i.e.
  * bestGoldRank is null or > k). See the "rule 4 fallback" note below for what happens otherwise.
+ *
+ * AMENDMENT (post round-1 review): the original rule 2 fired on bare `!goldInSingleChunk`, and rule 3
+ * included a `bestGoldRank === null` arm. Those two together made rule 4 (`unanswerable`) provably
+ * unreachable -- rule 3's null arm always intercepted the exact case rule 4 exists to catch -- which
+ * contradicts spec §7.3's explicit "no config combination hits" -> unanswerable row. Fixed below:
+ * rule 2's straddle arm now additionally requires bestGoldRank !== null (a genuine straddle has a
+ * chunk that *partially* overlaps gold, so it does appear in the ordering; bestGoldRank === null means
+ * no chunk overlaps at all, which is chunk-boundary-agnostic and is not chunking evidence on its own).
+ * Rule 3's null arm is deleted as dead code: goldInSingleChunk implies bestGoldRank !== null (see the
+ * invariant on AttributionSignals), so that arm could never actually be null in a valid input; only
+ * the `> k` arm was ever reachable there. Rule 4 is now the true fallback: bestGoldRank null (gold not
+ * covered by any chunk) and no counterfactual, of any kind, recovers it.
  */
 export function decideVerdict(signals: AttributionSignals, counterfactuals: Counterfactual[]): VerdictResult {
   const { goldInSingleChunk, bestGoldRank, k } = signals;
@@ -56,11 +73,13 @@ export function decideVerdict(signals: AttributionSignals, counterfactuals: Coun
   }
 
   // Rule 2 (§7.3 row 1, "Gold span split across boundary in S, and/or another chunker hits with same
-  // E"): the gold span not being intact in any single chunk is itself decisive chunking evidence
-  // (2a); a chunker counterfactual recovering it is independent evidence of the same failure mode
-  // (2b). 2a is checked first, so a straddling span is reported as "gold-straddles-chunks" even when
-  // a chunker counterfactual also happens to hit.
-  if (!goldInSingleChunk) {
+  // E"): a genuine straddle -- some chunk partially overlaps gold (bestGoldRank !== null) but none
+  // contains it whole -- is decisive chunking evidence (2a). A chunker counterfactual recovering gold
+  // is independent evidence of the same failure mode (2b), and applies even when bestGoldRank is null
+  // (gold isn't covered by any chunk in THIS set, but a different chunker's set does cover it). 2a is
+  // checked first, so a straddling span is reported as "gold-straddles-chunks" even when a chunker
+  // counterfactual also happens to hit.
+  if (!goldInSingleChunk && bestGoldRank !== null) {
     return { verdict: "chunking", rule: "gold-straddles-chunks" };
   }
   if (anyHit(counterfactuals, "chunker")) {
@@ -68,28 +87,22 @@ export function decideVerdict(signals: AttributionSignals, counterfactuals: Coun
   }
 
   // Rule 3 (§7.3 row 2, "Gold span intact in one chunk; another embedder hits with same S; rank far
-  // under E"): the gold chunk exists whole (goldInSingleChunk, guaranteed true past rule 2 above), so
-  // any remaining miss is attributable to embedding/ranking, not chunking. An embedder counterfactual
-  // hit (3a) is checked before the original-rank check (3b), so it wins the rule name when both hold.
-  if (anyHit(counterfactuals, "embedder")) {
-    return { verdict: "embedding", rule: "embedder-counterfactual-hits" };
-  }
-  if (bestGoldRank === null || bestGoldRank > k) {
-    return { verdict: "embedding", rule: "gold-intact-not-ranked" };
+  // under E"): only applies when the gold chunk exists whole (goldInSingleChunk), in which case
+  // bestGoldRank !== null is guaranteed by the type's invariant, so the `> k` comparison below is
+  // always well-defined. An embedder counterfactual hit (3a) is checked before the original-rank
+  // check (3b), so it wins the rule name when both hold.
+  if (goldInSingleChunk) {
+    if (anyHit(counterfactuals, "embedder")) {
+      return { verdict: "embedding", rule: "embedder-counterfactual-hits" };
+    }
+    if (bestGoldRank !== null && bestGoldRank > k) {
+      return { verdict: "embedding", rule: "gold-intact-not-ranked" };
+    }
   }
 
-  // Rule 4 (§7.3 row 4, "No config combination hits"): nothing, real or counterfactual, recovers the
-  // gold span anywhere -- likely a test-set data issue rather than a pipeline bug.
-  //
-  // NOTE (auditability): given rules 2-3 above, this branch is UNREACHABLE from any genuine failure
-  // input. Rule 2 unconditionally claims every !goldInSingleChunk input as chunking, and rule 3
-  // unconditionally claims every goldInSingleChunk input with bestGoldRank null or > k as embedding --
-  // together those cover every case where the original run actually missed gold within k. The only
-  // way to reach this fallback is to call decideVerdict on a non-failure (bestGoldRank !== null and
-  // <= k, i.e. the original run actually hit), which violates this function's precondition. Kept as
-  // the literal, spec-documented fallback (and exercised by a precondition-violation test) rather than
-  // silently reshaped; flagged to the team as a decision table gap worth resolving (see
-  // task-1-report.md).
+  // Rule 4 (§7.3 row 4, "No config combination hits"): the gold span isn't captured by any chunk in
+  // this set (bestGoldRank null, so it can't be a straddle either) and no tried combination -- real or
+  // counterfactual, of any kind -- finds it anywhere. Likely a test-set data issue, not a pipeline bug.
   return { verdict: "unanswerable", rule: "nothing-hits" };
 }
 
