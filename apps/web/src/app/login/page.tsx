@@ -1,6 +1,9 @@
 import { AuthError } from "next-auth";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { signIn } from "@/auth";
+import { Notice } from "@/components/notice";
+import { cls } from "@/lib/ui";
 
 export default async function LoginPage({
   searchParams,
@@ -28,12 +31,34 @@ export default async function LoginPage({
   }
 
   return (
-    <form action={login}>
-      <h1>Log in</h1>
-      {error ? <p role="alert">Invalid email or password.</p> : null}
-      <input name="email" type="email" placeholder="email" required />
-      <input name="password" type="password" placeholder="password" required />
-      <button type="submit">Log in</button>
-    </form>
+    <div className="rb-auth">
+      <div className="rb-auth__card">
+        <span className={cls.eyebrow}>RAGBench</span>
+        <h1>Log in</h1>
+        {error ? <Notice>Invalid email or password.</Notice> : null}
+        <form action={login} className="rb-auth__form">
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Email</span>
+            <input className={cls.input} name="email" type="email" autoComplete="email" required />
+          </label>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Password</span>
+            <input
+              className={cls.input}
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <button type="submit" className={cls.btnPrimary}>
+            Log in
+          </button>
+        </form>
+        <p className="rb-auth__foot">
+          No account? <Link href="/signup">Sign up</Link>
+        </p>
+      </div>
+    </div>
   );
 }

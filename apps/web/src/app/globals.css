@@ -1,4 +1,744 @@
-:root { color-scheme: light; }
-* { box-sizing: border-box; margin: 0; }
-body { font-family: ui-sans-serif, system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
-main { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
+/* RAGBench design system -- neutral palette, layout primitives, and every interaction state
+   (hover, focus-visible, striping, selection) that an inline style object cannot express.
+   The four STATE colours are deliberately NOT defined here: they are data-driven (a status
+   string picks one at render time) and live in src/lib/ui.ts, so every colour in the product
+   has exactly one definition -- neutrals here, state there. */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces: page is the slightly cool grey, cards and tables sit on white above it. */
+  --rb-canvas: #f6f8fa;
+  --rb-surface: #ffffff;
+  --rb-surface-muted: #f6f8fa;
+  --rb-surface-inset: #eef1f4;
+
+  /* Hairlines. --rb-border is the structural rule; --rb-border-muted separates rows inside a
+     block that already has a structural border around it. */
+  --rb-border: #d0d7de;
+  --rb-border-muted: #e3e7eb;
+  --rb-border-strong: #afb8c1;
+
+  --rb-text: #1f2328;
+  --rb-text-muted: #57606a;
+  --rb-text-inverse: #ffffff;
+
+  /* The single interactive accent: links and the focus ring. Never used decoratively, and never
+     to convey state -- state is the four colours in lib/ui.ts and nothing else. */
+  --rb-accent: #0969da;
+  --rb-accent-subtle: #ddf4ff;
+
+  --rb-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Not a second display face: a mono stack for identifiers, hashes and numeric columns, so
+     digits line up down a column and an 8-char hash reads as an opaque token rather than prose. */
+  --rb-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --rb-radius-sm: 4px;
+  --rb-radius: 6px;
+  --rb-radius-lg: 8px;
+
+  --rb-shadow-card: 0 1px 0 rgba(31, 35, 40, 0.04);
+  --rb-shadow-raised: 0 8px 24px rgba(31, 35, 40, 0.12);
+
+  /* Content column. Pages that carry a wide grid raise this on <main> itself. */
+  --rb-measure: 1080px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--rb-font);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--rb-canvas);
+  color: var(--rb-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 20px; }
+h2 { font-size: 16px; }
+h3 { font-size: 15px; }
+h4 { font-size: 13px; }
+
+a {
+  color: var(--rb-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+::selection {
+  background: var(--rb-accent-subtle);
+  color: var(--rb-text);
+}
+
+/* One ring for everything focusable. Applied on :focus-visible only, so a mouse click on a grid
+   cell does not leave a ring behind but a Tab to it does. */
+:focus-visible {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 2px;
+  border-radius: var(--rb-radius-sm);
+}
+
+/* ---- App shell ---------------------------------------------------------- */
+
+.rb-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.rb-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 48px;
+  padding: 0 24px;
+  background: var(--rb-surface);
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-topbar__brand {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--rb-text);
+}
+
+.rb-topbar__brand:hover {
+  text-decoration: none;
+  color: var(--rb-accent);
+}
+
+/* The square bracket to the left of the wordmark: the one piece of ornament in the product, and
+   it is a glyph rather than an image so it costs nothing and scales with the type. */
+.rb-topbar__mark {
+  display: inline-block;
+  margin-right: 8px;
+  font-family: var(--rb-font-mono);
+  color: var(--rb-text-muted);
+}
+
+.rb-topbar__spacer {
+  flex: 1;
+}
+
+.rb-topbar__link {
+  font-size: 13px;
+  color: var(--rb-text-muted);
+}
+
+.rb-topbar__link:hover {
+  color: var(--rb-text);
+  text-decoration: none;
+}
+
+.rb-main {
+  flex: 1;
+  width: 100%;
+  max-width: var(--rb-measure);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ---- Page header -------------------------------------------------------- */
+
+.rb-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-page-header__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.rb-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rb-text-muted);
+}
+
+.rb-page-header__meta {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--rb-text-muted);
+}
+
+/* ---- Sections and cards ------------------------------------------------- */
+
+.rb-section {
+  margin-bottom: 32px;
+}
+
+.rb-section__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.rb-section__hint {
+  font-size: 13px;
+  color: var(--rb-text-muted);
+}
+
+.rb-card {
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+  box-shadow: var(--rb-shadow-card);
+}
+
+.rb-card--pad {
+  padding: 16px;
+}
+
+/* ---- Tables ------------------------------------------------------------- */
+
+/* Wrapper: keeps a wide table scrolling inside its own card instead of widening the page. */
+.rb-table-wrap {
+  overflow-x: auto;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+  box-shadow: var(--rb-shadow-card);
+}
+
+.rb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rb-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rb-text-muted);
+  background: var(--rb-surface-muted);
+  border-bottom: 1px solid var(--rb-border);
+  white-space: nowrap;
+}
+
+.rb-table td {
+  padding: 8px 12px;
+  vertical-align: top;
+  border-top: 1px solid var(--rb-border-muted);
+}
+
+.rb-table tbody tr:first-child td {
+  border-top: none;
+}
+
+.rb-table tbody tr:hover td {
+  background: var(--rb-surface-muted);
+}
+
+/* Numeric column: right-aligned, mono, fixed-width digits so a column of scores scans vertically. */
+.rb-table .rb-num,
+.rb-num {
+  text-align: right;
+  font-family: var(--rb-font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rb-mono {
+  font-family: var(--rb-font-mono);
+  font-size: 12px;
+}
+
+.rb-muted {
+  color: var(--rb-text-muted);
+}
+
+.rb-truncate {
+  display: block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Buttons ------------------------------------------------------------ */
+
+.rb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--rb-text);
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.rb-btn:hover:not(:disabled) {
+  background: var(--rb-surface-muted);
+  border-color: var(--rb-border-strong);
+}
+
+.rb-btn:active:not(:disabled) {
+  background: var(--rb-surface-inset);
+}
+
+.rb-btn:disabled {
+  color: #8c959f;
+  background: var(--rb-surface-muted);
+  cursor: not-allowed;
+}
+
+/* The primary action is near-black rather than a colour: green/amber/red/grey are spoken for by
+   state, and a primary button that borrowed one of them would read as a verdict. */
+.rb-btn--primary {
+  color: var(--rb-text-inverse);
+  background: var(--rb-text);
+  border-color: var(--rb-text);
+}
+
+.rb-btn--primary:hover:not(:disabled) {
+  background: #32383f;
+  border-color: #32383f;
+}
+
+.rb-btn--primary:active:not(:disabled) {
+  background: #24292f;
+}
+
+.rb-btn--primary:disabled {
+  color: #ffffff;
+  background: #8c959f;
+  border-color: #8c959f;
+}
+
+.rb-btn--sm {
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Looks like a link, behaves like a button (used for in-flow controls such as the window
+   expanders on the evidence page). */
+.rb-btn--ghost {
+  padding: 2px 6px;
+  color: var(--rb-accent);
+  background: transparent;
+  border-color: transparent;
+}
+
+.rb-btn--ghost:hover:not(:disabled) {
+  background: var(--rb-accent-subtle);
+  border-color: transparent;
+  text-decoration: underline;
+}
+
+/* ---- Forms -------------------------------------------------------------- */
+
+.rb-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.rb-form--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.rb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rb-field__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rb-text-muted);
+}
+
+.rb-input {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--rb-text);
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+}
+
+.rb-input::placeholder {
+  color: #8c959f;
+}
+
+.rb-input:hover:not(:disabled) {
+  border-color: var(--rb-border-strong);
+}
+
+.rb-input:disabled {
+  background: var(--rb-surface-muted);
+  cursor: not-allowed;
+}
+
+select.rb-input {
+  padding-right: 6px;
+  max-width: 22rem;
+}
+
+input[type="file"].rb-input {
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.rb-fieldset {
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+  padding: 10px 12px 12px;
+  min-width: 0;
+}
+
+.rb-fieldset legend {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rb-text-muted);
+}
+
+/* Rows inside a fieldset (a config checkbox, a mode radio). The whole row is the hit target. */
+.rb-choice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: var(--rb-radius-sm);
+  cursor: pointer;
+}
+
+.rb-choice:hover {
+  background: var(--rb-surface-muted);
+}
+
+.rb-choice--inline {
+  display: inline-flex;
+  margin-right: 8px;
+}
+
+.rb-choice input {
+  accent-color: var(--rb-accent);
+}
+
+/* ---- Notices ------------------------------------------------------------ */
+
+.rb-notice {
+  display: block;
+  padding: 8px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-left-width: 3px;
+  border-radius: var(--rb-radius);
+}
+
+/* ---- Empty states ------------------------------------------------------- */
+
+.rb-empty {
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--rb-surface);
+  border: 1px dashed var(--rb-border);
+  border-radius: var(--rb-radius);
+}
+
+.rb-empty__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rb-text);
+}
+
+.rb-empty__hint {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--rb-text-muted);
+}
+
+/* ---- Auth pages --------------------------------------------------------- */
+
+.rb-auth {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.rb-auth__card {
+  width: 100%;
+  max-width: 340px;
+  padding: 24px;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-card);
+}
+
+.rb-auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.rb-auth__foot {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--rb-text-muted);
+  text-align: center;
+}
+
+/* ---- Run grid ----------------------------------------------------------- */
+
+.rb-grid td {
+  padding: 0;
+}
+
+.rb-grid td.rb-grid__question {
+  padding: 8px 12px;
+  min-width: 22rem;
+  max-width: 34rem;
+}
+
+/* A result cell. Solid state colour with white text -- every one of the four passes 4.5:1 against
+   white -- sized as a real target rather than a coloured word. */
+.rb-cell {
+  display: block;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--rb-text-inverse);
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+
+.rb-cell:hover {
+  filter: brightness(1.12);
+}
+
+.rb-cell:focus-visible {
+  outline: 2px solid var(--rb-text);
+  outline-offset: -3px;
+  border-radius: 0;
+}
+
+.rb-cell--selected {
+  box-shadow: inset 0 0 0 3px var(--rb-text);
+}
+
+/* Pending: same footprint so the grid does not reflow as results land, but visibly inert. */
+.rb-cell--pending {
+  cursor: default;
+  color: var(--rb-text-muted);
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--rb-surface-muted) 0 6px,
+    var(--rb-surface-inset) 6px 12px
+  );
+}
+
+/* ---- Drawer ------------------------------------------------------------- */
+
+.rb-drawer {
+  margin-top: 24px;
+  padding: 16px 20px 20px;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-raised);
+}
+
+.rb-drawer__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-drawer__block {
+  margin-bottom: 20px;
+}
+
+/* ---- Evidence view ------------------------------------------------------ */
+
+/* The document itself. A fixed measure and open leading, because this is the one place in the
+   product where a human reads prose rather than scans a table. */
+.rb-doc {
+  max-width: 70ch;
+  padding: 20px 24px;
+  font-size: 15px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+}
+
+/* The gold span. Warm enough to be unmistakable in a screenshot, with a heavier underline so it
+   survives greyscale and does not depend on colour alone. */
+.rb-doc mark {
+  padding: 1px 0;
+  color: var(--rb-text);
+  background: #fff3b8;
+  box-shadow: inset 0 -2px 0 #d4a72c;
+}
+
+/* A chunk boundary. Full-height hairline in the flow of the text: the tick is what makes "the
+   answer was split in half" legible at a glance. */
+.rb-tick {
+  border-left: 2px solid var(--rb-border-strong);
+  margin-left: 2px;
+  padding-left: 3px;
+}
+
+.rb-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--rb-text-muted);
+}
+
+.rb-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rb-legend__swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--rb-border);
+}
+
+/* ---- Key/value signal block -------------------------------------------- */
+
+.rb-kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.rb-kv dt {
+  color: var(--rb-text-muted);
+}
+
+.rb-kv dd {
+  margin: 0;
+  font-family: var(--rb-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Progress ----------------------------------------------------------- */
+
+.rb-progress {
+  width: 220px;
+  height: 6px;
+  appearance: none;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--rb-surface-inset);
+}
+
+.rb-progress::-webkit-progress-bar {
+  background: var(--rb-surface-inset);
+}
+
+.rb-progress::-webkit-progress-value {
+  background: var(--rb-text-muted);
+}
+
+.rb-progress::-moz-progress-bar {
+  background: var(--rb-text-muted);
+}
+
+/* ---- Misc --------------------------------------------------------------- */
+
+.rb-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rb-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.rb-code {
+  padding: 1px 6px;
+  font-family: var(--rb-font-mono);
+  font-size: 12px;
+  background: var(--rb-surface-inset);
+  border-radius: var(--rb-radius-sm);
+}
