@@ -201,8 +201,13 @@ export function EvidenceClient({
   }
 
   const text = document.text ?? "";
-  const [windowStart, setWindowStart] = useState(() => Math.max(0, question.goldStart - WINDOW_PAD));
   const [windowEnd, setWindowEnd] = useState(() => Math.min(text.length, question.goldEnd + WINDOW_PAD));
+  // Clamped to windowEnd: a gold span far beyond a re-parsed (now shorter) document would otherwise
+  // put windowStart past windowEnd -- buildSegments degrades to an empty render on that inversion,
+  // but an empty window with no highlight is worse than showing the document's tail.
+  const [windowStart, setWindowStart] = useState(() =>
+    Math.min(Math.max(0, question.goldStart - WINDOW_PAD), Math.min(text.length, question.goldEnd + WINDOW_PAD)),
+  );
 
   const evidenceIds = new Set(attribution?.evidenceChunkIds ?? []);
   const segments = document.text !== null
