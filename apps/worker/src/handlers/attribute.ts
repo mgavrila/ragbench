@@ -75,14 +75,18 @@ async function embedQuestion(
   report: UsageReporter,
 ): Promise<number[]> {
   const [vector] = await factory(model, report).embed([question]);
-  // Same reasoning as evaluate-question.ts: an empty batch is a provider misbehaving, and
-  // retrieveTopK would reject the empty vector anyway. Classified here so it carries the model.
-  if (vector === undefined) {
+  // Same reasoning as evaluate-question.ts: an empty batch is a provider misbehaving, not an empty
+  // result. The zero-LENGTH case is checked here as well as by retrieveTopK, and the duplication is
+  // deliberate: retrieveTopK's own throw would be raised from OUTSIDE this function, past the
+  // per-cell catch in the embedder loop, and would land in the handler's outer catch -- reporting an
+  // alternate embedder's misbehaviour as a failure of the config's own query embed, which discards
+  // the whole diagnosis. Classified here instead, so each model's failure stays attached to it.
+  if (vector === undefined || vector.length === 0) {
     throw new ProviderError(
       "fatal",
       // Second field is the PROVIDER, not the model -- the registry maps one to the other.
       lookupEmbeddingModel(model)?.provider ?? "unknown",
-      `embedder returned no vector for the question (${model})`,
+      `embedder returned no usable vector for the question (${model})`,
     );
   }
   return vector;
@@ -126,8 +130,17 @@ async function gatherEvidence(
   // Half-open overlap (start < goldEnd AND end > goldStart), the same predicate spansOverlap uses,
   // so a chunk that merely touches the span at an endpoint does not count. Containment is then a
   // filter over these rows rather than its own query: a chunk containing the whole span necessarily
-  // overlaps it, which is exactly what keeps AttributionSignals' invariant (goldInSingleChunk =>
-  // bestGoldRank !== null) true by construction -- the containing chunk is in the ordering below.
+  // overlaps it, so it is in the ordering below and AttributionSignals' invariant
+  // (goldInSingleChunk => bestGoldRank !== null) holds.
+  //
+  // LIMIT OF THAT ARGUMENT: it holds for a FULLY embedded chunk set. These rows come from `chunks`,
+  // while the ordering comes from a join against `chunk_embeddings`, so a set that is only partly
+  // embedded (an embed job that failed midway leaves some chunks without vectors) can have a
+  // containing chunk that is missing from the ordering -- goldInSingleChunk true alongside
+  // bestGoldRank null. decideVerdict handles that shape without crashing (it falls through to
+  // `unanswerable`, or to whatever a counterfactual recovers), so the failure mode is a misleading
+  // verdict on a half-built set, not an exception. Surfacing partial embedding properly is parked
+  // for plan 6; this job deliberately does not paper over it by re-embedding anything.
   const overlapping = await db.select({
     id: chunks.id, startOffset: chunks.startOffset, endOffset: chunks.endOffset,
   })
@@ -236,6 +249,12 @@ async function gatherEvidence(
   // larger k returns exactly this prefix (same ordering, same id tie-break), so two more round
   // trips to Postgres would return rows we are already holding.
   let deepest = config.topK;
+  // The label of the deepest cell a reader can actually SEE (the config's own k to start with, then
+  // whichever topk cell last made it into the matrix). The skip message below names this rather than
+  // `deepest`, which is a row count: in a 12-chunk set at topK 8 the k=16 cell exists and retrieves
+  // 12 rows, so "same rows as k=16" points at something on screen where "same rows as k=12" would
+  // name a cutoff that appears nowhere.
+  let deepestLabel = `k=${config.topK}`;
   for (const multiple of [2, 4] as const) {
     const requested = config.topK * multiple;
     // Clamped to what is actually retrievable: asking for k=40 in a 16-chunk set is still a 16-chunk
@@ -244,12 +263,13 @@ async function gatherEvidence(
     if (effective <= deepest) {
       skipped.push(
         `k=${requested}: only ${full.length} chunk(s) are retrievable here, so it retrieves the ` +
-          `same rows as k=${deepest}`,
+          `same rows as ${deepestLabel}`,
       );
       continue;
     }
     matrix.push({ kind: "topk", label: `k=${requested}`, ...scoreAgainstGold(full.slice(0, effective), gold) });
     deepest = effective;
+    deepestLabel = `k=${requested}`;
   }
 
   // Gold-overlapping chunks first (what the evidence view highlights), then what the run actually

@@ -378,6 +378,47 @@ describe("attributeHandler counterfactual matrix", () => {
     );
   });
 
+  it("names the config's own cutoff when no deeper retrieval is possible at all", async () => {
+    // topK 16 in a 16-chunk set: neither 2x nor 4x can retrieve a row the run did not already see,
+    // so both cells are skipped and the message names k=16 -- the cutoff the user configured, the
+    // only depth on screen -- rather than a row count that matches no cell.
+    const result = await freshResult(q.intact, { topK: FIXED_SET_CHUNKS });
+    await diagnose(result.id);
+    const cf = stored(await attributionFor(result.id));
+
+    expect(cellsOf(cf, "topk")).toEqual([]);
+    for (const requested of [32, 64]) {
+      expect(cf.skipped).toContain(
+        `k=${requested}: only ${FIXED_SET_CHUNKS} chunk(s) are retrievable here, so it retrieves ` +
+          `the same rows as k=${FIXED_SET_CHUNKS}`,
+      );
+    }
+  });
+
+  it("skips a model that has vectors but is no longer in the registry", async () => {
+    // A model dropped from EMBEDDING_MODELS in some later release, with its vectors still in the
+    // database. makeEmbedder would throw a plain Error for it, which no retry could fix, so the
+    // enumeration has to recognise it as missing evidence before trying to call it. Seeded directly
+    // because embedHandler (correctly) refuses to write vectors for an unknown model.
+    const [chunk] = await ctx.db.select({ id: chunks.id }).from(chunks)
+      .where(eq(chunks.chunkSetId, fixedSetId)).limit(1);
+    await ctx.db.insert(chunkEmbeddings)
+      .values({ chunkId: chunk.id, model: "legacy-embedding-v0", dimension: 3, embedding: [1, 0, 0] });
+    try {
+      const result = await freshResult(q.intact);
+      await expect(diagnose(result.id)).resolves.toBeUndefined();
+
+      const row = await attributionFor(result.id);
+      const cf = stored(row);
+      expect(row.verdict).toBe("embedding");
+      expect(cf.skipped).toContain(`embedder "legacy-embedding-v0": not a known embedding model`);
+      expect(cf.matrix.some((c) => c.label === "legacy-embedding-v0")).toBe(false);
+    } finally {
+      // Shared fixture: leaving this behind would add a skipped line to every later diagnosis.
+      await ctx.db.delete(chunkEmbeddings).where(eq(chunkEmbeddings.model, "legacy-embedding-v0"));
+    }
+  });
+
   it("skips an alternate embedder that cannot be called instead of failing the diagnosis", async () => {
     const failingAlt: typeof makeEmbedder = (model, report) => {
       if (model !== ALT_MODEL) return makeEmbedder(model, report);
@@ -391,12 +432,31 @@ describe("attributeHandler counterfactual matrix", () => {
     const result = await freshResult(q.intact);
     await expect(diagnose(result.id, makeLLM, failingAlt)).resolves.toBeUndefined();
 
+
     const row = await attributionFor(result.id);
     const cf = stored(row);
     // The verdict never depended on that cell, so it is still computed and stored.
     expect(row.verdict).toBe("embedding");
     expect(cellsOf(cf, "embedder")).toEqual([]);
     expect(cf.skipped).toContain(`embedder "${ALT_MODEL}": no credentials for openai`);
+  });
+
+  it("blames the right model when an alternate embedder returns an empty vector", async () => {
+    const emptyAlt: typeof makeEmbedder = (model, report) => {
+      if (model !== ALT_MODEL) return makeEmbedder(model, report);
+      return { model: ALT_MODEL, dimension: 1536, async embed(): Promise<number[][]> { return [[]]; } };
+    };
+    const result = await freshResult(q.intact);
+    await expect(diagnose(result.id, makeLLM, emptyAlt)).resolves.toBeUndefined();
+
+    const row = await attributionFor(result.id);
+    // Classified as THIS model's failure and skipped like any other unrunnable cell. If the empty
+    // vector reached retrieveTopK instead, its throw would escape the per-cell catch and be logged
+    // as a failure of the config's own query embed -- discarding the whole diagnosis.
+    expect(row.verdict).toBe("embedding");
+    expect(stored(row).skipped).toContain(
+      `embedder "${ALT_MODEL}": embedder returned no usable vector for the question (${ALT_MODEL})`,
+    );
   });
 });
 

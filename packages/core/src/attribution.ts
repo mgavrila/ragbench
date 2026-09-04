@@ -10,7 +10,9 @@ export type AttributionSignals = {
   /**
    * Whether the gold answer span lies entirely within a single chunk (vs. split across a boundary).
    * Invariant: goldInSingleChunk implies bestGoldRank !== null -- a chunk that contains the whole
-   * span also overlaps it, so it necessarily appears (at some rank) in the full ordering below.
+   * span also overlaps it, so it appears (at some rank) in the full ordering below. This holds for a
+   * fully embedded chunk set; a partially embedded one can break it (the containing chunk exists but
+   * has no vector, so nothing ranks it), which decideVerdict tolerates rather than assumes away.
    */
   goldInSingleChunk: boolean;
   /**
@@ -87,10 +89,14 @@ export function decideVerdict(signals: AttributionSignals, counterfactuals: Coun
   }
 
   // Rule 3 (§7.3 row 2, "Gold span intact in one chunk; another embedder hits with same S; rank far
-  // under E"): only applies when the gold chunk exists whole (goldInSingleChunk), in which case
-  // bestGoldRank !== null is guaranteed by the type's invariant, so the `> k` comparison below is
-  // always well-defined. An embedder counterfactual hit (3a) is checked before the original-rank
-  // check (3b), so it wins the rule name when both hold.
+  // under E"): only applies when the gold chunk exists whole (goldInSingleChunk). The type's
+  // invariant says bestGoldRank is then non-null, but the explicit null check in 3b below is NOT
+  // redundant: the invariant is only as good as the caller's chunk set is complete. A partially
+  // embedded set (an embed job that failed midway) can present goldInSingleChunk true with
+  // bestGoldRank null, because the containing chunk exists but has no vector to be ranked by. This
+  // function stays total on that input rather than trusting the invariant -- 3b simply does not
+  // fire, and the input falls through to rule 4. An embedder counterfactual hit (3a) is checked
+  // before the original-rank check (3b), so it wins the rule name when both hold.
   if (goldInSingleChunk) {
     if (anyHit(counterfactuals, "embedder")) {
       return { verdict: "embedding", rule: "embedder-counterfactual-hits" };
