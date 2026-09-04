@@ -12,7 +12,7 @@ import { embedHandler } from "../src/handlers/embed";
 import { evaluateQuestionHandler } from "../src/handlers/evaluate-question";
 import { attributeHandler, type StoredCounterfactuals } from "../src/handlers/attribute";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: ReturnType<typeof createDb>;
 
 // pg-boss stand-in: this handler never enqueues, but the context type demands one.

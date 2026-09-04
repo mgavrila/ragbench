@@ -3,3 +3,4 @@ export * from "./client";
 export * from "./usage";
 export * from "./files";
 export * from "./fingerprint";
+export * from "./testing";

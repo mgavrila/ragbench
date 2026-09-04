@@ -37,6 +37,30 @@ describe("provider error taxonomy", () => {
     expect(toProviderError("anthropic", orig)).toBe(orig);
   });
 
+  it("truncates a runaway provider message to the stored cap", () => {
+    // Providers that echo the request back turn one failed job into a multi-megabyte error column.
+    const long = new Error("x".repeat(5000));
+    const message = toProviderError("openai", long).message;
+    expect(message).toHaveLength(300);
+    expect(message.endsWith("...")).toBe(true);
+  });
+
+  it("redacts anything shaped like an API key before it can be stored", () => {
+    const leaked = new Error("401 Incorrect API key provided: sk-proj-AbC123xyz-9. Check your key.");
+    const message = toProviderError("openai", leaked).message;
+    expect(message).toContain("sk-***");
+    expect(message).not.toContain("AbC123xyz");
+    // Redaction happens before truncation, so a key at the cut cannot survive as a readable prefix.
+    const buried = new Error(`${"x".repeat(290)} sk-proj-SECRETKEYVALUE`);
+    expect(toProviderError("openai", buried).message).not.toContain("SECRET");
+  });
+
+  it("leaves an ordinary message exactly as the provider wrote it", () => {
+    const plain = new Error("model gpt-4o-mini does not support this endpoint");
+    expect(toProviderError("openai", plain).message)
+      .toBe("model gpt-4o-mini does not support this endpoint");
+  });
+
   it("maps a malformed-response parse failure (TypeError, no status) to fatal", () => {
     // Real providers now wrap the SDK call *and* the response parsing that follows it
     // (usage reporting, field access) in the same try/catch, rethrowing via

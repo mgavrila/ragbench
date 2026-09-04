@@ -4,7 +4,7 @@ import { createDb, migrateDb } from "../src/client";
 import { organizations, usageLog } from "../src/schema";
 import { makeUsageReporter } from "../src/usage";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: Awaited<ReturnType<typeof createDb>>;
 let orgId: string;
 

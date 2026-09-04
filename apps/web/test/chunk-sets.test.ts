@@ -17,7 +17,7 @@ function req(body: unknown) {
 }
 
 beforeAll(async () => {
-  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
   const r = await registerUser({ email: `cs${Date.now()}@t.dev`, password: "hunter2xx", organizationName: "CS" });
   if (!r.ok) throw new Error("signup failed");
   orgId = r.organizationId;

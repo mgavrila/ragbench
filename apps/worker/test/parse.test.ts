@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { createDb, organizations, projects, documents, documentPath } from "@ragbench/db";
 import { parseHandler, sanitizeExtractedText } from "../src/handlers/parse";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 let ctx: ReturnType<typeof createDb>;
 let orgId: string;

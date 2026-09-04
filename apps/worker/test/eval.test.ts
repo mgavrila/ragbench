@@ -10,7 +10,7 @@ import { embedHandler } from "../src/handlers/embed";
 import { startRunHandler } from "../src/handlers/start-run";
 import { evaluateQuestionHandler } from "../src/handlers/evaluate-question";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: ReturnType<typeof createDb>;
 
 // The mock embedder is a bag-of-tokens hash (hashEmbed), so cosine similarity is just the overlap

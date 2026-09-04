@@ -4,7 +4,7 @@ import { verifyCredentials } from "@/auth-core";
 
 beforeAll(() => {
   process.env.DATABASE_URL =
-    process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+    process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 });
 
 function req(body: unknown) {

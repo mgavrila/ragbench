@@ -13,7 +13,7 @@ const sent: Array<{ queue: string; data: unknown; key: string }> = [];
 const fakeSend = async (queue: string, data: object, key: string) => { sent.push({ queue, data, key }); };
 
 beforeAll(async () => {
-  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+  process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
   const res = await registerUser({ email: `d${Date.now()}@t.dev`, password: "hunter2xx", organizationName: "D" });
   if (!res.ok) throw new Error("signup failed");
   orgId = res.organizationId;

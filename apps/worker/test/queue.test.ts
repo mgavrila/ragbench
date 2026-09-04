@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { startWorker, enqueue } from "../src/queue";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 
 describe("worker queue", () => {
   // Both tests below leave rows behind in the "echo"/"noop" queues: test 1 reaches a terminal

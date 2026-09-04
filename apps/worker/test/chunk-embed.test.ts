@@ -7,7 +7,7 @@ import { hashParams, makeEmbedder, ProviderError } from "@ragbench/core";
 import { chunkHandler } from "../src/handlers/chunk";
 import { embedHandler } from "../src/handlers/embed";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: ReturnType<typeof createDb>;
 let orgId: string; let projectId: string; let setId: string;
 

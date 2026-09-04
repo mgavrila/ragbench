@@ -8,7 +8,7 @@ import {
   describeGeneration, generateTestsetHandler, passesTrivialityGate, roundRobinPassages,
 } from "../src/handlers/generate-testset";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: ReturnType<typeof createDb>;
 let orgId: string;
 

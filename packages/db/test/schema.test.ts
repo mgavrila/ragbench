@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { createDb, migrateDb } from "../src/client";
 import { organizations, projects, chunkEmbeddings, chunkSets, chunks, documents, testSets } from "../src/schema";
 
-const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
+const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: Awaited<ReturnType<typeof createDb>>;
 
 beforeAll(async () => {
