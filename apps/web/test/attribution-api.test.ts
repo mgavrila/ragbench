@@ -120,12 +120,19 @@ describe("diagnose api", () => {
   // explain, and the job it would start is a matrix of counterfactual retrievals plus an LLM call
   // -- a real bill for an answer to a question nobody asked. Same for a row with no retrieval
   // outcome yet (hit null): there is nothing to diagnose until the evaluation lands.
+  // The two rejections say different things on purpose: a hit is finished, while a row with no
+  // retrieval outcome yet may become diagnosable once its evaluation lands. Telling the second one
+  // "this result hit" would be false.
   it("409s a result that hit, and one with no retrieval outcome yet, without enqueueing", async () => {
     sent.length = 0;
-    for (const id of [hitResultId, pendingResultId]) {
+    const cases = [
+      { id: hitResultId, error: "diagnosis explains retrieval misses; this result hit" },
+      { id: pendingResultId, error: "diagnosis explains retrieval misses; this result has no retrieval outcome" },
+    ];
+    for (const { id, error } of cases) {
       const res = await diagnoseResult(id, session() as never, fakeSend);
       expect(res.status).toBe(409);
-      expect((await res.json()).error).toBe("diagnosis explains retrieval misses; this result hit");
+      expect((await res.json()).error).toBe(error);
     }
     expect(sent).toHaveLength(0);
   });

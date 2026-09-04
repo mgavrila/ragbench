@@ -50,7 +50,20 @@ describe("provider error taxonomy", () => {
     const message = toProviderError("openai", leaked).message;
     expect(message).toContain("sk-***");
     expect(message).not.toContain("AbC123xyz");
-    // Redaction happens before truncation, so a key at the cut cannot survive as a readable prefix.
+
+    // Real keys from both vendors are base64url, so they contain underscores. A character class
+    // without `_` matches only up to the first one and leaves the rest of the key sitting in the
+    // stored message.
+    const underscored = new Error("401 invalid key sk-ant-api03-Ab_cD3f_gH1jK2-lMn0 rejected");
+    const redacted = toProviderError("anthropic", underscored).message;
+    expect(redacted).toContain("sk-***");
+    expect(redacted).not.toContain("cD3f");
+    expect(redacted).not.toContain("gH1jK2");
+    expect(redacted).toBe("401 invalid key sk-*** rejected");
+
+    // A key near the cut is stripped rather than half-surviving. (Both orderings happen to strip
+    // this one -- truncating first would leave a shorter prefix that still matches the pattern --
+    // so this pins the outcome, not the order the two steps run in.)
     const buried = new Error(`${"x".repeat(290)} sk-proj-SECRETKEYVALUE`);
     expect(toProviderError("openai", buried).message).not.toContain("SECRET");
   });

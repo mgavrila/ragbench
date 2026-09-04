@@ -32,15 +32,23 @@ export async function diagnoseResult(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   // Diagnosis answers "why did retrieval miss the gold span?", so it is only offered on a row that
-  // actually missed. A hit (or a row that has no retrieval result yet -- hit null on a pending or
-  // retrieval-failed row) has no miss to explain, and spending a matrix of counterfactual
-  // retrievals plus an LLM call on one is a bill for an answer nobody asked for. Rejected here
-  // rather than in the worker: the handler stays permissive on purpose (it is total over hit and
-  // miss alike, and the evidence view still renders a diagnosis that already exists), so this is
-  // the gate on what gets STARTED.
+  // actually missed. Spending a matrix of counterfactual retrievals plus an LLM call on any other
+  // row is a bill for an answer to a question nobody asked. Rejected here rather than in the
+  // worker: the handler stays permissive on purpose (it is total over hit and miss alike, and the
+  // evidence view still renders a diagnosis that already exists), so this is the gate on what gets
+  // STARTED.
+  //
+  // The two non-miss cases get their own message because they are different situations and the
+  // difference is actionable: a hit is finished and will never need diagnosing, while `hit` null
+  // (a pending row, or one whose retrieval itself failed) may well become diagnosable once the
+  // evaluation lands. Telling the second "this result hit" would be simply false.
   if (owner.hit !== false) {
     return NextResponse.json(
-      { error: "diagnosis explains retrieval misses; this result hit" },
+      {
+        error: owner.hit === true
+          ? "diagnosis explains retrieval misses; this result hit"
+          : "diagnosis explains retrieval misses; this result has no retrieval outcome",
+      },
       { status: 409 },
     );
   }
