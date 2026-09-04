@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import Link from "next/link";
+import type { Attribution } from "@/lib/attribution";
 
 type RunDetail = {
   id: string;
@@ -71,6 +73,29 @@ const RED = "#cf222e";
 const AMBER = "#9a6700";
 const GREY = "#57606a";
 
+// Same verdict->color mapping as evidence-client.tsx (per-file constants by house convention, not a
+// shared module -- see plan 6 for any future consolidation): retrieval (raise k) is closest to a
+// quick fix, hence green; chunking/embedding both need rebuilding artifacts; unanswerable reads as
+// a likely test-set issue rather than a pipeline failure, hence neutral grey.
+const VERDICT_COLOR: Record<Attribution["verdict"], string> = {
+  retrieval: GREEN, chunking: AMBER, embedding: RED, unanswerable: GREY,
+};
+
+type AttrState = {
+  attribution: Attribution | null;
+  posting: boolean;
+  polling: boolean;
+  timedOut: boolean;
+  error: string | null;
+};
+
+const DEFAULT_ATTR_STATE: AttrState = { attribution: null, posting: false, polling: false, timedOut: false, error: null };
+
+const POLL_INTERVAL_MS = 2000;
+// Bounded so a diagnose that never resolves (silent-failure ruling: a non-retryable embed failure
+// writes no row at all, task-2-report.md) re-enables the button instead of spinning forever.
+const POLL_TIMEOUT_MS = 30000;
+
 const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
 
 function fmtPct(v: number | null): string {
@@ -135,10 +160,25 @@ export function RunClient({ runId }: { runId: string }) {
   // openCell runs outside this effect, so it cannot use the `cancelled` flag below to decide
   // whether its awaited fetch still has a component to update. This is that flag for the drawer.
   const mounted = useRef(true);
+  const pollTimers = useRef<Record<string, ReturnType<typeof setInterval>>>({});
+  const pollElapsed = useRef<Record<string, number>>({});
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      for (const t of Object.values(pollTimers.current)) clearInterval(t);
+    };
   }, []);
+
+  const [attrByResult, setAttrByResult] = useState<Record<string, AttrState>>({});
+
+  function patchAttr(resultId: string, patch: Partial<AttrState>) {
+    if (!mounted.current) return;
+    setAttrByResult((prev) => ({
+      ...prev,
+      [resultId]: { ...DEFAULT_ATTR_STATE, ...prev[resultId], ...patch },
+    }));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +223,73 @@ export function RunClient({ runId }: { runId: string }) {
     return `${configId}:${questionId}`;
   }
 
+  // Courtesy check: when a drawer opens on a cell it hasn't seen before, look up whether it was
+  // already diagnosed (e.g. in an earlier visit, or by another tab) so the badge appears without
+  // requiring a fresh Diagnose click. Deliberately excludes attrByResult from its deps -- it only
+  // needs to run once per newly-opened cell, not every time diagnose()'s own updates land.
+  useEffect(() => {
+    if (!selected) return;
+    const detail = cellCache[cellKey(selected.configId, selected.questionId)];
+    if (!detail) return;
+    const resultId = detail.result.id;
+    if (attrByResult[resultId] !== undefined) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/results/${resultId}/attribution`);
+        if (cancelled || !mounted.current || !res.ok) return;
+        const body = await res.json();
+        patchAttr(resultId, { attribution: body.attribution });
+      } catch {
+        // Best-effort only -- Diagnose stays the recovery path either way.
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, cellCache]);
+
+  async function diagnose(resultId: string) {
+    patchAttr(resultId, { posting: true, error: null, timedOut: false });
+    try {
+      const res = await fetch(`/api/results/${resultId}/diagnose`, { method: "POST" });
+      if (!mounted.current) return;
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        patchAttr(resultId, { posting: false, error: body.error ?? "failed to start diagnose" });
+        return;
+      }
+      patchAttr(resultId, { posting: false, polling: true });
+      pollElapsed.current[resultId] = 0;
+      pollTimers.current[resultId] = setInterval(async () => {
+        pollElapsed.current[resultId] = (pollElapsed.current[resultId] ?? 0) + POLL_INTERVAL_MS;
+        try {
+          const pollRes = await fetch(`/api/results/${resultId}/attribution`);
+          if (!mounted.current) return;
+          if (pollRes.ok) {
+            const body = await pollRes.json();
+            if (body.attribution) {
+              clearInterval(pollTimers.current[resultId]);
+              delete pollTimers.current[resultId];
+              patchAttr(resultId, { attribution: body.attribution, polling: false });
+              return;
+            }
+          }
+        } catch {
+          // A single blip doesn't end the loop -- the bounded timeout below still applies.
+        }
+        if (!mounted.current) return;
+        if ((pollElapsed.current[resultId] ?? 0) >= POLL_TIMEOUT_MS) {
+          clearInterval(pollTimers.current[resultId]);
+          delete pollTimers.current[resultId];
+          patchAttr(resultId, { polling: false, timedOut: true });
+        }
+      }, POLL_INTERVAL_MS);
+    } catch (err) {
+      if (!mounted.current) return;
+      patchAttr(resultId, { posting: false, error: err instanceof Error ? err.message : "failed to start diagnose" });
+    }
+  }
+
   async function openCell(configId: string, questionId: string) {
     setSelected({ configId, questionId });
     const key = cellKey(configId, questionId);
@@ -217,6 +324,8 @@ export function RunClient({ runId }: { runId: string }) {
 
   const { run, configs, grid } = data;
   const selectedDetail = selected ? cellCache[cellKey(selected.configId, selected.questionId)] : undefined;
+  const selectedResultId = selectedDetail?.result.id;
+  const selectedAttr = selectedResultId ? attrByResult[selectedResultId] : undefined;
 
   return (
     <div>
@@ -349,6 +458,40 @@ export function RunClient({ runId }: { runId: string }) {
                 {fmtNum(selectedDetail.result.correctness)}
               </p>
               {judgeReason(selectedDetail.result.judgeRaw) ? <p>{judgeReason(selectedDetail.result.judgeRaw)}</p> : null}
+
+              <h4>Diagnosis</h4>
+              {selectedResultId ? (
+                <p>
+                  {selectedAttr?.attribution ? (
+                    <span
+                      style={{
+                        background: VERDICT_COLOR[selectedAttr.attribution.verdict], color: "white",
+                        padding: "2px 8px", borderRadius: 4, marginRight: 8,
+                      }}
+                    >
+                      {selectedAttr.attribution.verdict}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => diagnose(selectedResultId)}
+                      disabled={selectedAttr?.posting || selectedAttr?.polling}
+                      style={{ marginRight: 8 }}
+                    >
+                      {selectedAttr?.posting
+                        ? "Starting…"
+                        : selectedAttr?.polling
+                          ? "Diagnosing…"
+                          : selectedAttr?.timedOut
+                            ? "Try again"
+                            : "Diagnose"}
+                    </button>
+                  )}
+                  <Link href={`/results/${selectedResultId}`}>Evidence →</Link>
+                  {selectedAttr?.timedOut ? <span role="alert"> — still not ready after 30s</span> : null}
+                  {selectedAttr?.error ? <span role="alert"> — {selectedAttr.error}</span> : null}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </section>
