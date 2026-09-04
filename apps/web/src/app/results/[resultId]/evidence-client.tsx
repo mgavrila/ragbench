@@ -363,7 +363,7 @@ export function EvidenceClient({
               <span className={cls.legendItem}>
                 <span
                   className={cls.legendSwatch}
-                  style={{ background: "transparent", borderLeft: "3px solid var(--rb-border-strong)" }}
+                  style={{ background: "transparent", borderLeft: "3px solid var(--rb-text-muted)" }}
                 />
                 chunk boundary (hover for its index)
               </span>

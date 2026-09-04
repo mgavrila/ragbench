@@ -542,12 +542,18 @@ input[type="file"].rb-input {
 
 /* ---- Run grid ----------------------------------------------------------- */
 
+/* `height: 1px` is the standard full-height-cell trick: a table cell never actually shrinks below
+   its content, but declaring a height is what lets the button's `height: 100%` resolve against the
+   row instead of collapsing. Without it a result cell floats at the top of a taller row (one whose
+   question wrapped to two lines) and leaves a white sliver under the colour. */
 .rb-grid td {
   padding: 0;
+  height: 1px;
 }
 
 .rb-grid td.rb-grid__question {
   padding: 8px 12px;
+  height: auto;
   min-width: 22rem;
   max-width: 34rem;
 }
@@ -557,6 +563,7 @@ input[type="file"].rb-input {
 .rb-cell {
   display: block;
   width: 100%;
+  height: 100%;
   min-height: 34px;
   padding: 7px 10px;
   font: inherit;
@@ -645,12 +652,13 @@ input[type="file"].rb-input {
   box-shadow: inset 0 -2px 0 #d4a72c;
 }
 
-/* A chunk boundary. Full-height hairline in the flow of the text: the tick is what makes "the
-   answer was split in half" legible at a glance. */
+/* A chunk boundary, in the flow of the text: the tick is what makes "the answer was split in half"
+   legible at a glance, so it is drawn at text weight rather than as a hairline -- against 15px
+   prose a border-muted rule disappears, and this mark carries the page's whole argument. */
 .rb-tick {
-  border-left: 2px solid var(--rb-border-strong);
-  margin-left: 2px;
-  padding-left: 3px;
+  border-left: 2px solid var(--rb-text-muted);
+  margin-left: 3px;
+  padding-left: 4px;
 }
 
 .rb-legend {
