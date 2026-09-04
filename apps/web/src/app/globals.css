@@ -1,53 +1,138 @@
-/* RAGBench design system -- neutral palette, layout primitives, and every interaction state
-   (hover, focus-visible, striping, selection) that an inline style object cannot express.
-   The four STATE colours are deliberately NOT defined here: they are data-driven (a status
-   string picks one at render time) and live in src/lib/ui.ts, so every colour in the product
-   has exactly one definition -- neutrals here, state there. */
+/* RAGBench design system -- the neutral palette, the type scale, the layout primitives, and every
+   interaction state (hover, focus-visible, striping, selection) that an inline style object cannot
+   express.
+
+   Split of responsibility with src/lib/ui.ts: the four STATE colours are data-driven (a status
+   string picks one at render time) and live there. Their TINTS live here, as custom properties, and
+   ui.ts references them by var() -- so a tint is still defined exactly once, in the file that owns
+   surfaces, while staying reachable from the inline styles that need it.
+
+   House rules the rest of this file obeys:
+     - one sans for UI, a mono stack for identifiers and figures, and nothing else;
+     - colour carries STATE only -- never decoration, never hierarchy;
+     - every measurement is a step on the 4px scale;
+     - anything that moves does so in 120-180ms, and not at all under reduced motion. */
 
 :root {
   color-scheme: light;
 
-  /* Surfaces: page is the slightly cool grey, cards and tables sit on white above it. */
-  --rb-canvas: #f6f8fa;
-  --rb-surface: #ffffff;
-  --rb-surface-muted: #f6f8fa;
-  --rb-surface-inset: #eef1f4;
+  /* ---- Neutral ramp --------------------------------------------------------
+     One cool (blue-leaning) grey family, sampled so that adjacent steps are
+     distinguishable on a bad monitor but never dirty the whites. Every neutral in the
+     product is one of these twelve; the semantic aliases below are the only names used
+     outside this block. */
+  --rb-n-0: #ffffff;
+  --rb-n-25: #fbfcfe;
+  --rb-n-50: #f7f9fb;
+  --rb-n-75: #f4f6f9;
+  --rb-n-100: #eef1f6;
+  --rb-n-200: #e8ecf2;
+  --rb-n-300: #dde2ea;
+  --rb-n-400: #c3cbd8;
+  --rb-n-500: #9aa4b5;
+  --rb-n-600: #6c788c;
+  --rb-n-700: #5b6779;
+  --rb-n-800: #3a4454;
+  --rb-n-900: #141a21;
+
+  /* Surfaces, as three layers: the chassis (sidebar) is white, the content well is recessed
+     grey, and the cards float back up to white. That ordering is what makes the app read as a
+     frame around a workspace rather than as a page. */
+  --rb-canvas: var(--rb-n-75);
+  --rb-surface: var(--rb-n-0);
+  --rb-surface-muted: var(--rb-n-50);
+  --rb-surface-inset: var(--rb-n-100);
 
   /* Hairlines. --rb-border is the structural rule; --rb-border-muted separates rows inside a
      block that already has a structural border around it. */
-  --rb-border: #d0d7de;
-  --rb-border-muted: #e3e7eb;
-  --rb-border-strong: #afb8c1;
+  --rb-border: var(--rb-n-300);
+  --rb-border-muted: var(--rb-n-200);
+  --rb-border-strong: var(--rb-n-400);
 
-  --rb-text: #1f2328;
-  --rb-text-muted: #57606a;
-  --rb-text-inverse: #ffffff;
+  --rb-text: var(--rb-n-900);
+  --rb-text-secondary: var(--rb-n-800);
+  --rb-text-muted: var(--rb-n-700);
+  --rb-text-subtle: var(--rb-n-600);
+  --rb-text-inverse: var(--rb-n-0);
 
   /* The single interactive accent: links and the focus ring. Never used decoratively, and never
      to convey state -- state is the four colours in lib/ui.ts and nothing else. */
-  --rb-accent: #0969da;
-  --rb-accent-subtle: #ddf4ff;
+  --rb-accent: #1f5fd1;
+  --rb-accent-hover: #1a4fae;
+  --rb-accent-subtle: #e8effc;
+  --rb-accent-ring: rgba(31, 95, 209, 0.18);
+
+  /* ---- State tints ---------------------------------------------------------
+     A wash and a hairline per state colour, for the surfaces that carry state as a FILL (grid
+     tiles, notices) rather than as ink. Deliberately pale: the label on top of a tint is always
+     --rb-text (15:1), because the state hexes themselves are tuned for white-on-colour and only
+     reach ~4.4:1 as ink on their own tint. Colour is then one of three carriers -- fill, dot and
+     word -- rather than the only one. */
+  --rb-tint-success: #e7f4ec;
+  --rb-line-success: #b4dcc2;
+  --rb-tint-warning: #fbf1d8;
+  --rb-line-warning: #e3cd93;
+  --rb-tint-danger: #fdecec;
+  --rb-line-danger: #f2c3c5;
+  --rb-tint-neutral: var(--rb-n-100);
+  --rb-line-neutral: #d5dce6;
 
   /* The gold span's fill and its underline. Not a state colour -- it marks WHERE the answer is,
      not how the pipeline did -- so it lives with the neutrals, defined once here and referenced
      from evidence-client for the legend swatch that has to match it exactly. */
-  --rb-gold: #fff3b8;
-  --rb-gold-line: #d4a72c;
+  --rb-gold: #fdf0ad;
+  --rb-gold-line: #c99a17;
+  /* The rule drawn at a chunk boundary in the document. Its own token because it is the one mark
+     that carries the evidence page's whole argument, and it must not drift with the body text. */
+  --rb-boundary: #8793a8;
+  /* The wash over chunks the diagnosis actually leaned on. Amber at a tenth: present enough to
+     group the passages, pale enough that the gold span still reads as the brightest thing on the
+     page, and low enough that the prose over it stays at full contrast. */
+  --rb-evidence: rgba(154, 103, 0, 0.07);
 
-  --rb-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* ---- Type ----------------------------------------------------------------
+     --rb-font-sans is set by next/font in app/layout.tsx (self-hosted at build, no runtime
+     fetch); the stack below is what renders if that class never lands. */
+  --rb-font: var(--rb-font-sans, "Geist"), system-ui, -apple-system, "Segoe UI", sans-serif;
   /* Not a second display face: a mono stack for identifiers, hashes and numeric columns, so
      digits line up down a column and an 8-char hash reads as an opaque token rather than prose. */
   --rb-font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
+  /* One scale, eight steps. Every font-size in the product is one of these, and the pairing of a
+     step with its line-height and tracking is fixed here so a heading cannot be half-styled. */
+  --rb-fs-micro: 11px;
+  --rb-fs-xs: 12px;
+  --rb-fs-sm: 13px;
+  --rb-fs-base: 14px;
+  --rb-fs-prose: 15px;
+  --rb-fs-lg: 16px;
+  --rb-fs-xl: 20px;
+  --rb-fs-2xl: 25px;
+  --rb-fs-3xl: 34px;
+
+  /* Optical tracking: tight for display sizes, open for the small-caps labels. */
+  --rb-track-tight: -0.021em;
+  --rb-track-snug: -0.011em;
+  --rb-track-wide: 0.06em;
+  --rb-track-wider: 0.085em;
+
   --rb-radius-sm: 4px;
   --rb-radius: 6px;
   --rb-radius-lg: 8px;
+  --rb-radius-xl: 12px;
 
-  --rb-shadow-card: 0 1px 0 rgba(31, 35, 40, 0.04);
-  --rb-shadow-raised: 0 8px 24px rgba(31, 35, 40, 0.12);
+  /* Two elevation levels, and they mean different things: -sm is "this is a surface" (paired with
+     a hairline, barely visible), -lg is "this floats above the page" (the drawer, the auth card). */
+  --rb-shadow-sm: 0 1px 2px rgba(20, 26, 33, 0.05), 0 1px 3px rgba(20, 26, 33, 0.03);
+  --rb-shadow-md: 0 2px 4px rgba(20, 26, 33, 0.05), 0 4px 12px -4px rgba(20, 26, 33, 0.07);
+  --rb-shadow-lg: 0 16px 40px -12px rgba(20, 26, 33, 0.16), 0 4px 10px -4px rgba(20, 26, 33, 0.06);
+
+  --rb-ease: cubic-bezier(0.2, 0.6, 0.3, 1);
+  --rb-dur: 140ms;
 
   /* Content column. Pages that carry a wide grid raise this on <main> itself. */
   --rb-measure: 1080px;
+  --rb-sidebar: 236px;
 }
 
 *,
@@ -66,31 +151,39 @@ html {
 
 body {
   font-family: var(--rb-font);
-  font-size: 14px;
-  line-height: 1.5;
+  font-size: var(--rb-fs-base);
+  line-height: 1.55;
   background: var(--rb-canvas);
   color: var(--rb-text);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11";
 }
 
 h1, h2, h3, h4 {
   font-weight: 600;
   line-height: 1.25;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--rb-track-snug);
+  color: var(--rb-text);
+  text-wrap: balance;
 }
 
-h1 { font-size: 20px; }
-h2 { font-size: 16px; }
-h3 { font-size: 15px; }
-h4 { font-size: 13px; }
+h1 { font-size: var(--rb-fs-2xl); letter-spacing: var(--rb-track-tight); }
+h2 { font-size: var(--rb-fs-lg); }
+h3 { font-size: var(--rb-fs-base); }
+h4 { font-size: var(--rb-fs-sm); }
 
 a {
   color: var(--rb-accent);
   text-decoration: none;
+  transition: color var(--rb-dur) var(--rb-ease);
 }
 
 a:hover {
+  color: var(--rb-accent-hover);
   text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
 }
 
 ::selection {
@@ -106,65 +199,268 @@ a:hover {
   border-radius: var(--rb-radius-sm);
 }
 
-/* ---- App shell ---------------------------------------------------------- */
-
-.rb-shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+/* Thin, neutral scrollbars inside the app's own scroll containers, so a horizontally scrolling
+   table does not paint a heavy platform bar across the bottom of a card. */
+.rb-table-wrap,
+.rb-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rb-n-400) transparent;
 }
 
-.rb-topbar {
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---- App shell ---------------------------------------------------------- */
+
+/* Two columns for the whole document height. The rail is a real grid column rather than a fixed
+   or sticky element so that it spans the FULL page on a long document (and in a full-page
+   screenshot); the sticky part is its inner panel, which is what actually follows the scroll. */
+.rb-shell {
+  display: grid;
+  grid-template-columns: var(--rb-sidebar) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.rb-sidebar {
+  background: var(--rb-surface);
+  border-right: 1px solid var(--rb-border);
+}
+
+.rb-sidebar__inner {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* The wordmark sits in a row exactly as tall as the topbar beside it, so the two hairlines meet
+   across the seam and the chassis reads as one frame rather than two panels. */
+.rb-sidebar__brand-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  height: 48px;
-  padding: 0 24px;
-  background: var(--rb-surface);
+  flex: none;
+  height: 49px;
+  padding: 0 16px;
   border-bottom: 1px solid var(--rb-border);
 }
 
-.rb-topbar__brand {
-  font-size: 14px;
+.rb-sidebar__nav {
+  flex: 1;
+  padding: 20px 12px;
+}
+
+.rb-brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: var(--rb-fs-base);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: var(--rb-track-tight);
   color: var(--rb-text);
 }
 
-.rb-topbar__brand:hover {
+.rb-brand:hover {
+  color: var(--rb-text);
   text-decoration: none;
-  color: var(--rb-accent);
 }
 
 /* The square bracket to the left of the wordmark: the one piece of ornament in the product, and
    it is a glyph rather than an image so it costs nothing and scales with the type. */
-.rb-topbar__mark {
-  display: inline-block;
-  margin-right: 8px;
+.rb-brand__mark {
   font-family: var(--rb-font-mono);
+  font-size: var(--rb-fs-lg);
+  font-weight: 400;
+  color: var(--rb-text-subtle);
+  transition: color var(--rb-dur) var(--rb-ease);
+}
+
+.rb-brand:hover .rb-brand__mark {
+  color: var(--rb-accent);
+}
+
+.rb-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rb-nav + .rb-nav {
+  margin-top: 20px;
+}
+
+.rb-nav__label {
+  padding: 0 8px;
+  margin-bottom: 8px;
+  font-size: var(--rb-fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--rb-track-wider);
+  text-transform: uppercase;
+  color: var(--rb-text-subtle);
+}
+
+/* The current page's name in a context group: the group's subject, not a link to itself. */
+.rb-nav__subject {
+  display: block;
+  padding: 0 8px;
+  margin-bottom: 8px;
+  font-size: var(--rb-fs-sm);
+  font-weight: 600;
+  letter-spacing: var(--rb-track-snug);
+  color: var(--rb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rb-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: var(--rb-fs-sm);
+  font-weight: 500;
   color: var(--rb-text-muted);
+  border-radius: var(--rb-radius);
+  transition: background var(--rb-dur) var(--rb-ease), color var(--rb-dur) var(--rb-ease);
 }
 
-.rb-topbar__spacer {
-  flex: 1;
-}
-
-.rb-topbar__link {
-  font-size: 13px;
-  color: var(--rb-text-muted);
-}
-
-.rb-topbar__link:hover {
+.rb-nav__item:hover {
+  background: var(--rb-surface-inset);
   color: var(--rb-text);
   text-decoration: none;
 }
 
+/* Active is carried by weight and ink as well as by fill, so it survives a greyscale print and
+   does not depend on the wash alone. */
+.rb-nav__item--active {
+  background: var(--rb-surface-inset);
+  color: var(--rb-text);
+  font-weight: 600;
+}
+
+/* A 5px square, not a dot: the same mark the grid tiles use, so "selected" reads consistently. */
+.rb-nav__item::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 1.5px;
+  background: var(--rb-n-400);
+  transition: background var(--rb-dur) var(--rb-ease);
+}
+
+.rb-nav__item--active::before {
+  background: var(--rb-accent);
+}
+
+.rb-sidebar__foot {
+  flex: none;
+  padding: 14px 16px;
+  border-top: 1px solid var(--rb-border-muted);
+}
+
+.rb-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 12px;
+  min-width: 0;
+}
+
+.rb-account__avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  font-size: var(--rb-fs-micro);
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--rb-text-inverse);
+  background: var(--rb-n-800);
+  border-radius: var(--rb-radius);
+}
+
+.rb-account__name {
+  font-size: var(--rb-fs-xs);
+  color: var(--rb-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rb-viewport {
+  min-width: 0;
+}
+
+/* Deliberately not sticky: a full-page screenshot renders a sticky bar at its scroll position and
+   would stamp it into the middle of a long document. It scrolls with the page instead. */
+.rb-topbar {
+  display: flex;
+  align-items: center;
+  height: 49px;
+  padding: 0 32px;
+  background: var(--rb-surface);
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--rb-fs-sm);
+}
+
+.rb-crumbs li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The separator is drawn by CSS so the markup stays a list of places rather than a list of places
+   and punctuation, and so a screen reader reads the trail without a slash between every step. */
+.rb-crumbs li + li::before {
+  content: "/";
+  color: var(--rb-n-400);
+}
+
+.rb-crumbs a {
+  color: var(--rb-text-muted);
+  border-radius: var(--rb-radius-sm);
+}
+
+.rb-crumbs a:hover {
+  color: var(--rb-text);
+  text-decoration: none;
+}
+
+.rb-crumbs__current {
+  font-weight: 500;
+  color: var(--rb-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}
+
 .rb-main {
-  flex: 1;
   width: 100%;
   max-width: var(--rb-measure);
   margin: 0 auto;
-  padding: 24px;
+  padding: 32px 32px 96px;
 }
 
 /* ---- Page header -------------------------------------------------------- */
@@ -172,9 +468,9 @@ a:hover {
 .rb-page-header {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  padding-bottom: 16px;
-  margin-bottom: 24px;
+  gap: 24px;
+  padding-bottom: 20px;
+  margin-bottom: 28px;
   border-bottom: 1px solid var(--rb-border);
 }
 
@@ -185,24 +481,25 @@ a:hover {
 
 .rb-eyebrow {
   display: block;
-  margin-bottom: 4px;
-  font-size: 11px;
+  margin-bottom: 6px;
+  font-size: var(--rb-fs-micro);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--rb-track-wider);
   text-transform: uppercase;
-  color: var(--rb-text-muted);
+  color: var(--rb-text-subtle);
 }
 
 .rb-page-header__meta {
-  margin-top: 6px;
-  font-size: 13px;
+  margin-top: 10px;
+  font-size: var(--rb-fs-sm);
   color: var(--rb-text-muted);
 }
 
 /* ---- Sections and cards ------------------------------------------------- */
 
 .rb-section {
-  margin-bottom: 32px;
+  margin-bottom: 40px;
+  scroll-margin-top: 24px;
 }
 
 .rb-section__head {
@@ -213,19 +510,21 @@ a:hover {
 }
 
 .rb-section__hint {
-  font-size: 13px;
-  color: var(--rb-text-muted);
+  min-width: 0;
+  font-size: var(--rb-fs-sm);
+  color: var(--rb-text-subtle);
+  text-wrap: pretty;
 }
 
 .rb-card {
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius);
-  box-shadow: var(--rb-shadow-card);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-sm);
 }
 
 .rb-card--pad {
-  padding: 16px;
+  padding: 20px;
 }
 
 /* ---- Tables ------------------------------------------------------------- */
@@ -235,31 +534,31 @@ a:hover {
   overflow-x: auto;
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius);
-  box-shadow: var(--rb-shadow-card);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-sm);
 }
 
 .rb-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--rb-fs-sm);
 }
 
 .rb-table th {
-  padding: 8px 12px;
+  padding: 10px 14px;
   text-align: left;
-  font-size: 11px;
+  font-size: var(--rb-fs-micro);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--rb-track-wide);
   text-transform: uppercase;
-  color: var(--rb-text-muted);
+  color: var(--rb-text-subtle);
   background: var(--rb-surface-muted);
   border-bottom: 1px solid var(--rb-border);
   white-space: nowrap;
 }
 
 .rb-table td {
-  padding: 8px 12px;
+  padding: 11px 14px;
   vertical-align: top;
   border-top: 1px solid var(--rb-border-muted);
 }
@@ -268,8 +567,25 @@ a:hover {
   border-top: none;
 }
 
+/* Hover only, no zebra: a striped table plus a state column reads as two competing rhythms, and
+   the row a cursor is on is the only one that needs calling out. */
+.rb-table tbody tr {
+  transition: background var(--rb-dur) var(--rb-ease);
+}
+
 .rb-table tbody tr:hover td {
   background: var(--rb-surface-muted);
+}
+
+/* A link in a table row is the row's subject, not a call to action: it takes the body ink and
+   earns its underline on hover. A column of blue makes a data table look like a web page. */
+.rb-table td a {
+  color: var(--rb-text);
+  font-weight: 500;
+}
+
+.rb-table td a:hover {
+  color: var(--rb-accent);
 }
 
 /* Numeric column: right-aligned, mono, fixed-width digits so a column of scores scans vertically. */
@@ -277,13 +593,20 @@ a:hover {
 .rb-num {
   text-align: right;
   font-family: var(--rb-font-mono);
+  font-size: var(--rb-fs-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+.rb-table th.rb-num {
+  font-family: var(--rb-font);
+  font-size: var(--rb-fs-micro);
+}
+
 .rb-mono {
   font-family: var(--rb-font-mono);
-  font-size: 12px;
+  font-size: var(--rb-fs-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .rb-muted {
@@ -305,31 +628,40 @@ a:hover {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 5px 12px;
+  padding: 6px 12px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--rb-fs-sm);
   font-weight: 500;
   line-height: 20px;
-  color: var(--rb-text);
+  letter-spacing: var(--rb-track-snug);
+  color: var(--rb-text-secondary);
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
   border-radius: var(--rb-radius);
+  box-shadow: var(--rb-shadow-sm);
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  white-space: nowrap;
+  transition: background var(--rb-dur) var(--rb-ease), border-color var(--rb-dur) var(--rb-ease),
+    color var(--rb-dur) var(--rb-ease), box-shadow var(--rb-dur) var(--rb-ease);
 }
 
 .rb-btn:hover:not(:disabled) {
+  color: var(--rb-text);
   background: var(--rb-surface-muted);
   border-color: var(--rb-border-strong);
+  text-decoration: none;
 }
 
 .rb-btn:active:not(:disabled) {
   background: var(--rb-surface-inset);
+  box-shadow: none;
 }
 
 .rb-btn:disabled {
-  color: #8c959f;
+  color: var(--rb-n-500);
   background: var(--rb-surface-muted);
+  border-color: var(--rb-border-muted);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
@@ -337,44 +669,50 @@ a:hover {
    state, and a primary button that borrowed one of them would read as a verdict. */
 .rb-btn--primary {
   color: var(--rb-text-inverse);
-  background: var(--rb-text);
-  border-color: var(--rb-text);
+  background: var(--rb-n-900);
+  border-color: var(--rb-n-900);
 }
 
 .rb-btn--primary:hover:not(:disabled) {
-  background: #32383f;
-  border-color: #32383f;
+  color: var(--rb-text-inverse);
+  background: var(--rb-n-800);
+  border-color: var(--rb-n-800);
 }
 
 .rb-btn--primary:active:not(:disabled) {
-  background: #24292f;
+  background: var(--rb-n-900);
 }
 
 .rb-btn--primary:disabled {
-  color: #ffffff;
-  background: #8c959f;
-  border-color: #8c959f;
+  color: var(--rb-n-0);
+  background: var(--rb-n-500);
+  border-color: var(--rb-n-500);
 }
 
 .rb-btn--sm {
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 3px 8px;
+  font-size: var(--rb-fs-xs);
   line-height: 18px;
+}
+
+.rb-btn--block {
+  width: 100%;
 }
 
 /* Looks like a link, behaves like a button (used for in-flow controls such as the window
    expanders on the evidence page). */
 .rb-btn--ghost {
-  padding: 2px 6px;
+  padding: 4px 8px;
   color: var(--rb-accent);
   background: transparent;
   border-color: transparent;
+  box-shadow: none;
 }
 
 .rb-btn--ghost:hover:not(:disabled) {
+  color: var(--rb-accent-hover);
   background: var(--rb-accent-subtle);
   border-color: transparent;
-  text-decoration: underline;
 }
 
 /* ---- Forms -------------------------------------------------------------- */
@@ -383,7 +721,12 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 12px;
+  gap: 12px 16px;
+  padding: 16px;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-sm);
 }
 
 .rb-form--stack {
@@ -391,67 +734,105 @@ a:hover {
   align-items: stretch;
 }
 
+/* On the auth card the form is already inside a card -- no second frame. */
+.rb-auth__form,
+.rb-card .rb-form {
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+
 .rb-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .rb-field__label {
-  font-size: 12px;
+  font-size: var(--rb-fs-xs);
   font-weight: 500;
-  color: var(--rb-text-muted);
+  letter-spacing: var(--rb-track-snug);
+  color: var(--rb-text-secondary);
 }
 
 .rb-input {
-  padding: 5px 10px;
+  padding: 6px 10px;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--rb-fs-sm);
   line-height: 20px;
   color: var(--rb-text);
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
   border-radius: var(--rb-radius);
+  box-shadow: var(--rb-shadow-sm);
+  transition: border-color var(--rb-dur) var(--rb-ease), box-shadow var(--rb-dur) var(--rb-ease);
 }
 
 .rb-input::placeholder {
-  color: #8c959f;
+  color: var(--rb-text-subtle);
 }
 
 .rb-input:hover:not(:disabled) {
   border-color: var(--rb-border-strong);
 }
 
+/* The field's own focus treatment replaces the global outline: a 3px accent halo plus an accent
+   border reads as "this field is live" without the outline's offset gap breaking the input's box. */
+.rb-input:focus-visible {
+  outline: none;
+  border-color: var(--rb-accent);
+  box-shadow: 0 0 0 3px var(--rb-accent-ring);
+}
+
 .rb-input:disabled {
+  color: var(--rb-text-subtle);
   background: var(--rb-surface-muted);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
 select.rb-input {
-  padding-right: 6px;
+  padding-right: 8px;
   max-width: 22rem;
+  cursor: pointer;
 }
 
 input[type="file"].rb-input {
-  padding: 4px 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+input[type="file"].rb-input::file-selector-button {
+  margin-right: 10px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: var(--rb-fs-xs);
+  font-weight: 500;
+  color: var(--rb-text-secondary);
+  background: var(--rb-surface-muted);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-sm);
   cursor: pointer;
 }
 
 .rb-fieldset {
-  border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius);
-  padding: 10px 12px 12px;
+  padding: 8px 12px 10px;
   min-width: 0;
+  background: var(--rb-surface-muted);
+  border: 1px solid var(--rb-border-muted);
+  border-radius: var(--rb-radius);
 }
 
 .rb-fieldset legend {
   padding: 0 6px;
-  font-size: 11px;
+  margin-left: -4px;
+  font-size: var(--rb-fs-micro);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--rb-track-wide);
   text-transform: uppercase;
-  color: var(--rb-text-muted);
+  color: var(--rb-text-subtle);
 }
 
 /* Rows inside a fieldset (a config checkbox, a mode radio). The whole row is the hit target. */
@@ -459,231 +840,498 @@ input[type="file"].rb-input {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 3px 4px;
+  padding: 4px 6px;
+  font-size: var(--rb-fs-sm);
   border-radius: var(--rb-radius-sm);
   cursor: pointer;
+  transition: background var(--rb-dur) var(--rb-ease);
 }
 
 .rb-choice:hover {
-  background: var(--rb-surface-muted);
+  background: var(--rb-surface-inset);
 }
 
 .rb-choice--inline {
   display: inline-flex;
-  margin-right: 8px;
+  margin-right: 4px;
 }
 
 .rb-choice input {
   accent-color: var(--rb-accent);
+  cursor: pointer;
 }
 
 /* ---- Notices ------------------------------------------------------------ */
 
+/* A wash of the state's own tint behind a 3px rule of the state colour itself (set inline from
+   ui.ts). The body text stays --rb-text so the message is never coloured ink on a colour. */
 .rb-notice {
   display: block;
-  padding: 8px 12px;
-  margin: 8px 0;
-  font-size: 13px;
+  padding: 10px 14px;
+  margin: 12px 0;
+  font-size: var(--rb-fs-sm);
+  color: var(--rb-text);
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
   border-left-width: 3px;
   border-radius: var(--rb-radius);
+  box-shadow: var(--rb-shadow-sm);
 }
 
 /* ---- Empty states ------------------------------------------------------- */
 
+/* Kept compact on purpose: a project with nothing in it yet stacks five of these down one page,
+   and five tall boxes read as a broken page rather than as an invitation. */
 .rb-empty {
-  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 24px;
   text-align: center;
   background: var(--rb-surface);
-  border: 1px dashed var(--rb-border);
-  border-radius: var(--rb-radius);
+  border: 1px dashed var(--rb-border-strong);
+  border-radius: var(--rb-radius-lg);
+}
+
+.rb-empty__glyph {
+  margin-bottom: 12px;
+  color: var(--rb-n-400);
 }
 
 .rb-empty__title {
-  font-size: 13px;
+  font-size: var(--rb-fs-base);
   font-weight: 600;
+  letter-spacing: var(--rb-track-snug);
   color: var(--rb-text);
 }
 
 .rb-empty__hint {
-  margin-top: 4px;
-  font-size: 13px;
+  max-width: 56ch;
+  margin-top: 6px;
+  font-size: var(--rb-fs-sm);
+  line-height: 1.6;
   color: var(--rb-text-muted);
+  text-wrap: pretty;
 }
 
-/* ---- Auth pages --------------------------------------------------------- */
+/* ---- Auth and landing --------------------------------------------------- */
 
 .rb-auth {
-  min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  min-height: 100vh;
+  padding: 48px 24px;
 }
 
 .rb-auth__card {
   width: 100%;
-  max-width: 340px;
-  padding: 24px;
+  max-width: 372px;
+  padding: 28px;
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius-lg);
-  box-shadow: var(--rb-shadow-card);
+  border-radius: var(--rb-radius-xl);
+  box-shadow: var(--rb-shadow-lg);
+}
+
+.rb-auth__card h1 {
+  font-size: var(--rb-fs-xl);
+}
+
+.rb-auth__brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 20px;
+  font-size: var(--rb-fs-base);
+  font-weight: 600;
+  letter-spacing: var(--rb-track-tight);
+  color: var(--rb-text);
 }
 
 .rb-auth__form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 20px;
+  gap: 14px;
+  margin-top: 22px;
 }
 
 .rb-auth__foot {
-  margin-top: 16px;
-  font-size: 13px;
+  margin-top: 20px;
+  padding-top: 16px;
+  font-size: var(--rb-fs-sm);
   color: var(--rb-text-muted);
   text-align: center;
+  border-top: 1px solid var(--rb-border-muted);
+}
+
+/* The landing page: one column, generous, and it shows the instrument rather than describing it. */
+.rb-landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 88px 24px 64px;
+}
+
+.rb-landing__inner {
+  width: 100%;
+  max-width: 660px;
+}
+
+.rb-landing h1 {
+  margin-top: 20px;
+  font-size: var(--rb-fs-3xl);
+  line-height: 1.12;
+  letter-spacing: -0.028em;
+}
+
+.rb-landing__pitch {
+  max-width: 54ch;
+  margin-top: 16px;
+  font-size: var(--rb-fs-lg);
+  line-height: 1.6;
+  color: var(--rb-text-muted);
+  text-wrap: pretty;
+}
+
+.rb-landing__cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+.rb-landing__cta .rb-btn {
+  padding: 8px 18px;
+  font-size: var(--rb-fs-base);
+}
+
+/* The framed preview: real product markup at rest, not a picture of it. */
+.rb-preview {
+  margin-top: 48px;
+  overflow: hidden;
+  background: var(--rb-surface);
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius-xl);
+  box-shadow: var(--rb-shadow-lg);
+}
+
+.rb-preview__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: var(--rb-fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--rb-track-wider);
+  text-transform: uppercase;
+  color: var(--rb-text-subtle);
+  background: var(--rb-surface-muted);
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.rb-preview__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px 104px;
+  gap: 6px;
+  padding: 12px;
+  align-items: stretch;
+}
+
+.rb-preview__q {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-right: 8px;
+  font-size: var(--rb-fs-sm);
+  color: var(--rb-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The preview's tiles are the real thing at rest: same tokens, no interaction. */
+.rb-preview__grid .rb-cell {
+  cursor: default;
+}
+
+.rb-preview__grid .rb-cell:hover {
+  border-color: var(--rb-cell-line, var(--rb-line-neutral));
+  box-shadow: none;
+}
+
+.rb-preview__col {
+  font-size: var(--rb-fs-micro);
+  font-weight: 600;
+  letter-spacing: var(--rb-track-wide);
+  text-transform: uppercase;
+  color: var(--rb-text-subtle);
+}
+
+.rb-landing__foot {
+  margin-top: 32px;
+  font-size: var(--rb-fs-sm);
+  color: var(--rb-text-subtle);
 }
 
 /* ---- Run grid ----------------------------------------------------------- */
 
 /* `height: 1px` is the standard full-height-cell trick: a table cell never actually shrinks below
-   its content, but declaring a height is what lets the button's `height: 100%` resolve against the
-   row instead of collapsing. Without it a result cell floats at the top of a taller row (one whose
-   question wrapped to two lines) and leaves a white sliver under the colour. */
+   its content, but declaring a height is what lets the tile's `height: 100%` resolve against the
+   row instead of collapsing. Without it a result tile floats at the top of a taller row and leaves
+   a sliver of empty cell under it. */
 .rb-grid td {
-  padding: 0;
+  padding: 4px;
   height: 1px;
+  border-top-color: transparent;
+}
+
+.rb-grid th:not(:first-child) {
+  text-align: left;
 }
 
 .rb-grid td.rb-grid__question {
-  padding: 8px 12px;
+  padding: 8px 14px;
   height: auto;
+  width: 100%;
   min-width: 22rem;
   max-width: 34rem;
+  vertical-align: middle;
+  border-top: 1px solid var(--rb-border-muted);
 }
 
-/* A result cell. Solid state colour with white text -- every one of the four passes 4.5:1 against
-   white -- sized as a real target rather than a coloured word. */
-.rb-cell {
+/* One line per question, ellipsised, with the full text on hover: uniform row heights are what
+   make the matrix scan as a matrix rather than as a ragged list. */
+.rb-grid__text {
   display: block;
+  max-width: 34rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--rb-text-secondary);
+}
+
+.rb-grid tbody tr:hover td.rb-grid__question {
+  background: var(--rb-surface-muted);
+}
+
+/* A result tile. The state colour arrives as a WASH plus a 5px square in the same colour; the
+   label itself stays near-black. Ink at 15:1 rather than a state hex at 4.4:1 on its own tint,
+   and the state is still carried three ways over (fill, square, word). */
+.rb-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   height: 100%;
-  min-height: 34px;
+  min-height: 36px;
   padding: 7px 10px;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--rb-fs-micro);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--rb-track-wide);
   text-transform: uppercase;
   text-align: left;
-  color: var(--rb-text-inverse);
-  border: none;
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
+  color: var(--rb-text);
+  background: var(--rb-cell-tint, var(--rb-tint-neutral));
+  border: 1px solid var(--rb-cell-line, var(--rb-line-neutral));
+  border-radius: var(--rb-radius-sm);
   cursor: pointer;
+  transition: box-shadow var(--rb-dur) var(--rb-ease), border-color var(--rb-dur) var(--rb-ease);
+}
+
+.rb-cell::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 1.5px;
+  background: var(--rb-cell-dot, var(--rb-text-subtle));
 }
 
 .rb-cell:hover {
-  filter: brightness(1.12);
+  border-color: var(--rb-cell-dot, var(--rb-border-strong));
+  box-shadow: 0 0 0 1px var(--rb-cell-dot, var(--rb-border-strong));
 }
 
 .rb-cell:focus-visible {
-  outline: 2px solid var(--rb-text);
-  outline-offset: -3px;
-  border-radius: 0;
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 1px;
 }
 
-.rb-cell--selected {
-  box-shadow: inset 0 0 0 3px var(--rb-text);
+/* Selected outranks hover: a near-black ring, the one mark in the grid that is not a state colour. */
+.rb-cell--selected,
+.rb-cell--selected:hover {
+  border-color: var(--rb-text);
+  box-shadow: 0 0 0 1px var(--rb-text);
 }
 
-/* Pending: same footprint so the grid does not reflow as results land, but visibly inert. */
+/* Pending: same footprint so the grid does not reflow as results land, but visibly inert -- a
+   hairline dashed tile with no fill and no pointer. */
 .rb-cell--pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: var(--rb-fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--rb-track-wide);
+  text-transform: uppercase;
+  color: var(--rb-text-subtle);
+  background: var(--rb-surface-muted);
+  border: 1px dashed var(--rb-border);
+  border-radius: var(--rb-radius-sm);
   cursor: default;
-  color: var(--rb-text-muted);
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--rb-surface-muted) 0 6px,
-    var(--rb-surface-inset) 6px 12px
-  );
+}
+
+.rb-cell--pending::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 1.5px;
+  border: 1px solid var(--rb-n-500);
 }
 
 /* ---- Drawer ------------------------------------------------------------- */
 
 .rb-drawer {
-  margin-top: 24px;
-  padding: 16px 20px 20px;
+  margin-top: 28px;
+  padding: 24px 28px 28px;
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius-lg);
-  box-shadow: var(--rb-shadow-raised);
+  border-radius: var(--rb-radius-xl);
+  box-shadow: var(--rb-shadow-lg);
 }
 
 .rb-drawer__head {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
-  padding-bottom: 12px;
-  margin-bottom: 16px;
+  gap: 24px;
+  padding-bottom: 16px;
+  margin-bottom: 20px;
   border-bottom: 1px solid var(--rb-border);
 }
 
+.rb-drawer__head h3 {
+  font-size: var(--rb-fs-lg);
+}
+
 .rb-drawer__block {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
+}
+
+.rb-drawer__block:last-child {
+  margin-bottom: 0;
 }
 
 /* ---- Evidence view ------------------------------------------------------ */
 
-/* The document itself. A fixed measure and open leading, because this is the one place in the
-   product where a human reads prose rather than scans a table. */
+/* The evidence page is one reading column: the document sets the measure (~68ch of 15px prose)
+   and the diagnosis card, the matrix and the legend all align to it. Letting the cards run to the
+   full 1080px content width around 68ch of prose is what made the page look like a form; this is
+   what makes it look like a document. */
+.rb-reading {
+  max-width: 680px;
+  /* Centred rather than flush left: at a desk width the column is narrower than the content well,
+     and a document pinned to the left edge under a full-width topbar leaves the page looking
+     half-used. The chrome stays flush; the reading matter sits in the middle of its own page. */
+  margin: 0 auto;
+}
+
+/* The document itself. Open leading, because this is the one place in the product where a human
+   reads prose rather than scans a table. */
 .rb-doc {
-  max-width: 70ch;
-  padding: 20px 24px;
-  font-size: 15px;
-  line-height: 1.75;
+  max-width: 100%;
+  padding: 28px 32px;
+  font-size: var(--rb-fs-prose);
+  line-height: 1.8;
   white-space: pre-wrap;
   overflow-wrap: break-word;
+  color: var(--rb-text-secondary);
   background: var(--rb-surface);
   border: 1px solid var(--rb-border);
-  border-radius: var(--rb-radius);
+  border-radius: var(--rb-radius-lg);
+  box-shadow: var(--rb-shadow-sm);
 }
 
 /* The gold span. Warm enough to be unmistakable in a screenshot, with a heavier underline so it
    survives greyscale and does not depend on colour alone. */
 .rb-doc mark {
-  padding: 1px 0;
+  padding: 2px 1px;
   color: var(--rb-text);
   background: var(--rb-gold);
+  border-radius: 2px;
   box-shadow: inset 0 -2px 0 var(--rb-gold-line);
 }
 
-/* A chunk boundary, in the flow of the text: the tick is what makes "the answer was split in half"
-   legible at a glance, so it is drawn at text weight rather than as a hairline -- against 15px
-   prose a border-muted rule disappears, and this mark carries the page's whole argument. */
+/* A chunk boundary, in the flow of the text. Two marks in one: a full-height rule at the split
+   point and a cap at its top, so the tick reads as a deliberate instrument mark rather than as a
+   stray border. This is the mark that carries the page's whole argument -- that the answer was
+   cut in half -- so it is drawn at text weight, not as a hairline. */
 .rb-tick {
-  border-left: 2px solid var(--rb-text-muted);
-  margin-left: 3px;
-  padding-left: 4px;
+  position: relative;
+  margin-left: 5px;
+  padding-left: 7px;
+  border-left: 2px solid var(--rb-boundary);
+}
+
+.rb-tick::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 0;
+  width: 7px;
+  height: 2px;
+  background: var(--rb-boundary);
+}
+
+/* The diagnosis card's header strip: verdict chip and the rule that produced it, over a hairline.
+   The verdict is the single most important word on the page, so it gets a line of its own. */
+.rb-diagnosis__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--rb-border-muted);
+}
+
+.rb-diagnosis__prose {
+  max-width: 68ch;
+  font-size: var(--rb-fs-prose);
+  line-height: 1.7;
+  color: var(--rb-text-secondary);
+  text-wrap: pretty;
 }
 
 .rb-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px 24px;
   margin-top: 12px;
-  font-size: 12px;
+  padding: 10px 14px;
+  font-size: var(--rb-fs-xs);
   color: var(--rb-text-muted);
+  background: var(--rb-surface-muted);
+  border: 1px solid var(--rb-border-muted);
+  border-radius: var(--rb-radius);
 }
 
 .rb-legend__item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .rb-legend__swatch {
   display: inline-block;
+  flex: none;
   width: 14px;
   height: 14px;
   border-radius: 3px;
@@ -692,29 +1340,44 @@ input[type="file"].rb-input {
 
 /* ---- Key/value signal block -------------------------------------------- */
 
+/* The numbers a verdict was decided from, as a readout: hairline-separated rows, label left in
+   muted sans, value right in mono. */
 .rb-kv {
   display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 4px 16px;
+  grid-template-columns: max-content minmax(0, 1fr);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--rb-fs-sm);
+  background: var(--rb-surface-muted);
+  border: 1px solid var(--rb-border-muted);
+  border-radius: var(--rb-radius);
 }
 
 .rb-kv dt {
+  padding: 7px 16px 7px 14px;
   color: var(--rb-text-muted);
+  border-top: 1px solid var(--rb-border-muted);
 }
 
 .rb-kv dd {
   margin: 0;
+  padding: 7px 14px;
   font-family: var(--rb-font-mono);
+  font-size: var(--rb-fs-xs);
   font-variant-numeric: tabular-nums;
+  color: var(--rb-text);
+  border-top: 1px solid var(--rb-border-muted);
+}
+
+.rb-kv dt:first-of-type,
+.rb-kv dt:first-of-type + dd {
+  border-top: none;
 }
 
 /* ---- Progress ----------------------------------------------------------- */
 
 .rb-progress {
-  width: 220px;
-  height: 6px;
+  width: 200px;
+  height: 5px;
   appearance: none;
   border: none;
   border-radius: 999px;
@@ -727,11 +1390,25 @@ input[type="file"].rb-input {
 }
 
 .rb-progress::-webkit-progress-value {
-  background: var(--rb-text-muted);
+  background: var(--rb-n-800);
+  border-radius: 999px;
+  transition: width 240ms var(--rb-ease);
 }
 
 .rb-progress::-moz-progress-bar {
-  background: var(--rb-text-muted);
+  background: var(--rb-n-800);
+  border-radius: 999px;
+}
+
+/* While the run is still being worked, the bar breathes -- the one animation in the product, and
+   it exists to say "this number is still moving" without a spinner. */
+.rb-progress--live {
+  animation: rb-pulse 1.8s var(--rb-ease) infinite;
+}
+
+@keyframes rb-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 /* ---- Misc --------------------------------------------------------------- */
@@ -750,9 +1427,17 @@ input[type="file"].rb-input {
 }
 
 .rb-code {
-  padding: 1px 6px;
+  padding: 2px 7px;
   font-family: var(--rb-font-mono);
-  font-size: 12px;
+  font-size: var(--rb-fs-xs);
+  color: var(--rb-text-secondary);
   background: var(--rb-surface-inset);
+  border: 1px solid var(--rb-border-muted);
   border-radius: var(--rb-radius-sm);
+}
+
+/* A dotted separator between facts in a meta line, drawn by CSS so the markup stays a list of
+   facts rather than a list of facts and punctuation. */
+.rb-dot-sep {
+  color: var(--rb-n-500);
 }
