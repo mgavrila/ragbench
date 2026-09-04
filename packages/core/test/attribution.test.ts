@@ -39,9 +39,9 @@ describe("decideVerdict", () => {
       rule: "nothing-hits",
     },
     {
-      name: "rule 1 does not fire when bestGoldRank is null, even with a topk hit (rule 2a also needs bestGoldRank !== null, so this falls to rule 4)",
+      name: "rule 1 does not fire when bestGoldRank is null; a non-hit counterfactual doesn't change the fallback (rule 2a also needs bestGoldRank !== null, so this falls to rule 4)",
       signals: { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
-      counterfactuals: [cf("topk", true, 2)],
+      counterfactuals: [cf("chunker", false, null)],
       verdict: "unanswerable",
       rule: "nothing-hits",
     },
