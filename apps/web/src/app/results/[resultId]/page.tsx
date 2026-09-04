@@ -32,9 +32,6 @@ export default async function ResultPage({ params }: { params: Promise<{ resultI
     .innerJoin(evalRuns, eq(evalRuns.id, questionResults.runId))
     .innerJoin(projects, eq(projects.id, evalRuns.projectId))
     .where(eq(questionResults.id, resultId));
-  // A malformed resultId hits the same uuid-column query above; drizzle/pg reject it before any row
-  // could match, so this falls into the same "not found" branch as a well-formed but unknown id --
-  // no separate uuid guard needed here (unlike the API routes, which distinguish for a clean 404).
   if (!owner || owner.organizationId !== session.user.organizationId) notFound();
   const { result } = owner;
 
@@ -74,10 +71,11 @@ export default async function ResultPage({ params }: { params: Promise<{ resultI
         goldStart: question.goldStart,
         goldEnd: question.goldEnd,
       }}
-      document={{ filename: document?.filename ?? null, text: document?.text ?? null }}
+      doc={{ filename: document?.filename ?? null, text: document?.text ?? null }}
       chunks={chunkRows}
       initialAttribution={attribution}
       initialResultStatus={result.status}
+      hit={result.hit}
     />
   );
 }

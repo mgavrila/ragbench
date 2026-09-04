@@ -12,10 +12,11 @@ type Props = {
   resultId: string;
   runId: string;
   question: QuestionInfo;
-  document: DocumentInfo;
+  doc: DocumentInfo;
   chunks: ChunkOffset[];
   initialAttribution: Attribution | null;
   initialResultStatus: string;
+  hit: boolean | null;
 };
 
 // Same palette as run-client's RUN_STATUS_COLOR/cellColor (green/amber/red/grey) -- per-file
@@ -47,7 +48,7 @@ const POLL_INTERVAL_MS = 2000;
 // only recovery path, so the UI must hand control back to the user rather than waiting indefinitely.
 const POLL_TIMEOUT_MS = 30000;
 
-type Segment = {
+export type Segment = {
   start: number;
   text: string;
   isGold: boolean;
@@ -62,7 +63,7 @@ type Segment = {
  * straddled span render as two separate <mark> pieces with the boundary's tick between them, rather
  * than one continuous highlight that hides the split.
  */
-function buildSegments(
+export function buildSegments(
   text: string,
   windowStart: number,
   windowEnd: number,
@@ -130,7 +131,7 @@ function MatrixTable({ matrix }: { matrix: Attribution["counterfactuals"]["matri
 }
 
 export function EvidenceClient({
-  resultId, runId, question, document, chunks, initialAttribution, initialResultStatus,
+  resultId, runId, question, doc, chunks, initialAttribution, initialResultStatus, hit,
 }: Props) {
   const [attribution, setAttribution] = useState<Attribution | null>(initialAttribution);
   const [posting, setPosting] = useState(false);
@@ -200,7 +201,7 @@ export function EvidenceClient({
     }
   }
 
-  const text = document.text ?? "";
+  const text = doc.text ?? "";
   const [windowEnd, setWindowEnd] = useState(() => Math.min(text.length, question.goldEnd + WINDOW_PAD));
   // Clamped to windowEnd: a gold span far beyond a re-parsed (now shorter) document would otherwise
   // put windowStart past windowEnd -- buildSegments degrades to an empty render on that inversion,
@@ -210,7 +211,7 @@ export function EvidenceClient({
   );
 
   const evidenceIds = new Set(attribution?.evidenceChunkIds ?? []);
-  const segments = document.text !== null
+  const segments = doc.text !== null
     ? buildSegments(text, windowStart, windowEnd, question.goldStart, question.goldEnd, chunks, evidenceIds)
     : [];
 
@@ -219,7 +220,7 @@ export function EvidenceClient({
       <p><Link href={`/runs/${runId}`}>← Back to run</Link></p>
       <h1>{question.question}</h1>
       <p>Gold answer: {question.goldAnswer}</p>
-      <p>Document: {document.filename ?? "(unknown)"}</p>
+      <p>Document: {doc.filename ?? "(unknown)"}</p>
 
       <section>
         <h2>Diagnosis</h2>
@@ -255,18 +256,28 @@ export function EvidenceClient({
                 ? "Not yet diagnosed."
                 : "This result hasn't finished evaluating yet -- diagnosis works on any status, but there may be nothing conclusive yet."}
             </p>
-            <button type="button" onClick={diagnose} disabled={posting || polling}>
-              {posting ? "Starting…" : polling ? "Diagnosing…" : timedOut ? "Try again" : "Diagnose"}
-            </button>
-            {timedOut ? <p role="alert">Still not ready after 30s -- click Diagnose to check again.</p> : null}
-            {diagnoseError ? <p role="alert">{diagnoseError}</p> : null}
+            {/* decideVerdict's precondition is a missed question; a hit row has nothing to diagnose,
+                so the button (and its try-again/error state) is gated to hit === false. */}
+            {hit === false ? (
+              <>
+                <button type="button" onClick={diagnose} disabled={posting || polling}>
+                  {posting ? "Starting…" : polling ? "Diagnosing…" : timedOut ? "Try again" : "Diagnose"}
+                </button>
+                {timedOut ? <p role="alert">Still not ready after 30s -- click Diagnose to check again.</p> : null}
+                {diagnoseError ? <p role="alert">{diagnoseError}</p> : null}
+              </>
+            ) : hit === true ? (
+              <p style={{ color: GREY }}>
+                This result retrieved the gold chunk (a hit) -- diagnosis explains retrieval misses, not hits.
+              </p>
+            ) : null}
           </div>
         )}
       </section>
 
       <section>
         <h2>Evidence</h2>
-        {document.text === null ? (
+        {doc.text === null ? (
           <p>Document text unavailable.</p>
         ) : (
           <>

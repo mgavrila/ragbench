@@ -124,6 +124,12 @@ function cellText(cell: GridCell): string {
   return cell.status === "failed" && cell.hit !== null ? `${base} (failed)` : base;
 }
 
+/** Reciprocal rank -> the 1-based rank it was computed from, for display. Null when there's no
+ * rank to show (rr null or non-positive -- neither should occur on a hit, but stay total). */
+function rankFromRR(rr: number | null): number | null {
+  return rr !== null && rr > 0 ? Math.round(1 / rr) : null;
+}
+
 function judgeReason(judgeRaw: { raw: string } | null): string | null {
   if (!judgeRaw) return null;
   try {
@@ -471,7 +477,12 @@ export function RunClient({ runId }: { runId: string }) {
                     >
                       {selectedAttr.attribution.verdict}
                     </span>
-                  ) : (
+                  ) : null}
+                  {/* decideVerdict's precondition is a missed question -- diagnosing a hit row would
+                      run the decision table on an input it was never meant to see (rule 3/4's
+                      "unanswerable" fallback fires on a within-k hit, a false verdict). Offer the
+                      control only on a genuine miss; a hit row gets an explanatory line instead. */}
+                  {!selectedAttr?.attribution && selectedDetail.result.hit === false ? (
                     <button
                       type="button"
                       onClick={() => diagnose(selectedResultId)}
@@ -486,8 +497,16 @@ export function RunClient({ runId }: { runId: string }) {
                             ? "Try again"
                             : "Diagnose"}
                     </button>
-                  )}
-                  <Link href={`/results/${selectedResultId}`}>Evidence →</Link>
+                  ) : null}
+                  {selectedDetail.result.hit !== null || selectedAttr?.attribution ? (
+                    <Link href={`/results/${selectedResultId}`}>Evidence →</Link>
+                  ) : null}
+                  {selectedDetail.result.hit === true ? (
+                    <span style={{ color: GREY, marginLeft: 8 }}>
+                      retrieval hit at rank {rankFromRR(selectedDetail.result.reciprocalRank) ?? "?"} —
+                      diagnosis explains retrieval misses
+                    </span>
+                  ) : null}
                   {selectedAttr?.timedOut ? <span role="alert"> — still not ready after 30s</span> : null}
                   {selectedAttr?.error ? <span role="alert"> — {selectedAttr.error}</span> : null}
                 </p>

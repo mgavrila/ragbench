@@ -196,8 +196,14 @@ describe("mockExplanation", () => {
     expect(text).toContain("3");
   });
 
-  it("chunking template does not depend on rank", () => {
+  it("chunking template on the 2b door (chunker counterfactual hit, no straddle) does not claim a boundary split", () => {
     const text = mockExplanation("chunking", { goldInSingleChunk: false, bestGoldRank: null, k: 3 });
+    expect(text.toLowerCase()).not.toContain("boundary");
+    expect(text.toLowerCase()).not.toContain("split");
+  });
+
+  it("chunking template on a genuine straddle (2a) mentions the boundary split", () => {
+    const text = mockExplanation("chunking", { goldInSingleChunk: false, bestGoldRank: 3, k: 3 });
     expect(text.toLowerCase()).toContain("boundary");
   });
 

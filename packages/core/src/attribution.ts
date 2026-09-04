@@ -156,7 +156,7 @@ export function buildExplanationPrompt(
  * filled in with the signals that are relevant to that verdict.
  */
 export function mockExplanation(verdict: AttributionVerdict, signals: AttributionSignals): string {
-  const { bestGoldRank, k } = signals;
+  const { goldInSingleChunk, bestGoldRank, k } = signals;
   switch (verdict) {
     case "retrieval":
       return (
@@ -165,11 +165,18 @@ export function mockExplanation(verdict: AttributionVerdict, signals: Attributio
         `retrieval-depth failure.`
       );
     case "chunking":
-      return (
-        `The gold answer span is split across a chunk boundary rather than living intact in one ` +
-        `chunk, so no single retrieved chunk could ever contain the whole answer; this is a ` +
-        `chunking failure.`
-      );
+      // Mirrors decideVerdict's rule 2a/2b split: a genuine straddle (some chunk partially overlaps
+      // gold, none contains it whole) is a different failure shape than a chunker counterfactual
+      // recovering gold that this set's chunks -- intact or not covering it at all -- never surfaced.
+      // Claiming a "boundary split" on the 2b door would be false when the gold span isn't split at
+      // all; it just isn't in a retrievable chunk under this particular chunker's cuts.
+      return !goldInSingleChunk && bestGoldRank !== null
+        ? `The gold answer span is split across a chunk boundary rather than living intact in one ` +
+            `chunk, so no single retrieved chunk could ever contain the whole answer; this is a ` +
+            `chunking failure.`
+        : `This chunk set did not put the gold answer in a retrievable chunk, but a different ` +
+            `chunker's set retrieved it; the failure is in how the corpus was divided into chunks, ` +
+            `not in the embedder or the cutoff.`;
     case "embedding":
       return bestGoldRank === null
         ? `The gold span sits intact in a single chunk, but that chunk was never ranked highly ` +
