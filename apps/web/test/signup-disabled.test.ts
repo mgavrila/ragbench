@@ -12,8 +12,13 @@ function req(body: unknown) {
 }
 
 describe("DISABLE_SIGNUP", () => {
+  // Save/restore rather than delete: matches queue.test.ts's pattern for RAGBENCH_EVAL_CONCURRENCY
+  // (see apps/worker/test/queue.test.ts) so a real value set in the environment this suite runs
+  // under survives the suite instead of being unconditionally wiped.
+  const original = process.env.DISABLE_SIGNUP;
   afterEach(() => {
-    delete process.env.DISABLE_SIGNUP;
+    if (original === undefined) delete process.env.DISABLE_SIGNUP;
+    else process.env.DISABLE_SIGNUP = original;
   });
 
   describe("POST /api/signup", () => {

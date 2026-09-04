@@ -50,7 +50,13 @@ export const chunkHandler: JobHandler<{
           })));
         }
       }
-      await tx.update(chunkSets).set({ docsFingerprint: fingerprint }).where(eq(chunkSets.id, chunkSetId));
+      // A successful rebuild clears any stale advisory error left by reconcile.ts's stuck-build
+      // detection (see reconcile.ts): that write only ever happens when this same transaction
+      // never completed, so completing it now is proof the set is no longer stuck and the message
+      // would otherwise linger on the corpus page forever, describing a problem that already healed.
+      await tx.update(chunkSets)
+        .set({ docsFingerprint: fingerprint, embedError: null })
+        .where(eq(chunkSets.id, chunkSetId));
     });
   }
 

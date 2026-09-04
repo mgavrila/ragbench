@@ -59,6 +59,20 @@ describe("chunkHandler", () => {
     expect(after).toBe(before);
   });
 
+  // Simulates reconcile.ts's stuck-build advisory (see reconcile.ts): forcing a fingerprint
+  // mismatch is what makes chunkHandler actually re-run its build transaction rather than take the
+  // no-op skip path the "is idempotent" test above exercises -- that skip path never touches
+  // embedError, so a stale error from a set that got flagged and later recovered would otherwise
+  // never clear.
+  it("clears a stale embedError once a rebuild actually completes", async () => {
+    await ctx.db.update(chunkSets)
+      .set({ docsFingerprint: "stale-forces-rebuild", embedError: "build did not complete" })
+      .where(eq(chunkSets.id, setId));
+    await chunkHandler({ chunkSetId: setId }, { db: ctx.db, boss: recordingBoss });
+    const [after] = await ctx.db.select().from(chunkSets).where(eq(chunkSets.id, setId));
+    expect(after.embedError).toBeNull();
+  });
+
   it("enqueues nothing when the set has no embed models recorded", async () => {
     sentJobs.length = 0;
     await chunkHandler({ chunkSetId: setId, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });

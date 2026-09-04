@@ -1,4 +1,4 @@
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { chunkSets, documents, evalRuns, projects, type Db } from "@ragbench/db";
 import type { PgBoss } from "pg-boss";
 import { enqueue, type JobHandler } from "../queue";
@@ -7,15 +7,23 @@ const MINUTE_MS = 60_000;
 const RUN_STUCK_MS = 10 * MINUTE_MS;
 const CHUNK_SET_STUCK_MS = 15 * MINUTE_MS;
 const DOCUMENT_STUCK_MS = 15 * MINUTE_MS;
+// Past this, a run is not "still recoverable", it's abandoned: reconcile runs every 5 minutes, so
+// leaving re-enqueue unbounded would re-send start-run roughly 288 times a day forever for a run
+// nothing can actually rescue (e.g. every provider call exhausting its retries). House failure
+// philosophy is a terminal, visible failure instead -- see failRun in start-run.ts.
+const RUN_ABANDON_MS = 24 * 60 * MINUTE_MS;
 
 /**
  * How many pg-boss jobs on `queue` are still created/retrying/active for one payload key. Reads
- * pg-boss's own `job` table directly (partitioned by queue name, so this is one partition, not a
- * full-table scan) rather than through the pg-boss API: `fetch`/`work` consume jobs and
- * `getQueueStats` counts a whole queue, but nothing answers "is there still a live job for THIS
- * run/document/chunk-set" -- which is exactly what tells a run still fanning out apart from one
- * whose worker died mid-flight. `pgboss` is the default schema (see PgBoss's own DEFAULT_SCHEMA);
- * this worker never overrides it, so the name is safe to hardcode rather than plumb through.
+ * pg-boss's own `job` table directly rather than through the pg-boss API: `fetch`/`work` consume
+ * jobs and `getQueueStats` counts a whole queue, but nothing answers "is there still a live job for
+ * THIS run/document/chunk-set" -- which is exactly what tells a run still fanning out apart from
+ * one whose worker died mid-flight. pg-boss partitions this table by queue name by default (see its
+ * plans.js -- `noTablePartitioning` defaults to false, and this worker never sets it), so a
+ * `name = $1` filter is typically a single-partition lookup rather than a scan of every queue's
+ * jobs; that partitioning is pg-boss's own migration output, not something this query controls or
+ * verifies at runtime. `pgboss` is the default schema (see PgBoss's own DEFAULT_SCHEMA); this
+ * worker never overrides it, so the name is safe to hardcode rather than plumb through.
  */
 async function activeJobCount(
   db: Db,
@@ -34,32 +42,60 @@ async function activeJobCount(
 }
 
 /**
- * A run whose worker died mid-fan-out: `running`, older than the window, not yet complete, and
- * with no evaluate-question job still in flight for it. `completedJobs`/`totalJobs` and the
- * evaluate-question payload's `runId` are start-run's own contract (see start-run.ts), so this
- * reads the same signals a human would when deciding whether to re-click "start run".
+ * A run whose worker died mid-flight, in either of the two states that leaves it stranded:
+ *  - `running`, not yet complete, no evaluate-question job in flight -- start-run itself finished
+ *    the fan-out but the jobs it created never all landed (see start-run.ts's contract for
+ *    `totalJobs`/`completedJobs` and the evaluate-question payload's `runId`).
+ *  - `pending`, no start-run job in flight -- the route that creates a run enqueues start-run
+ *    immediately (see apps/web's runs route), so a pending run with nothing live for it means that
+ *    very first job never ran at all (send failed, or the worker died before picking it up).
+ * Both read as "no retry could still be coming" the same way: if pg-boss shows nothing
+ * created/retrying/active for this runId on the queue that would be advancing it, nothing is.
  *
  * Age is read off `createdAt` (eval_runs has no `updatedAt` -- see schema.ts) even though that is
- * the row's insert time, not when it entered `running`. A run retried after `failed` reuses the
- * same row, so a long-lived run that failed once and was restarted recently could in principle be
- * reconciled sooner than 10 minutes of *this* attempt's own running time. That is judged
- * acceptable: the no-active-jobs check is what actually gates re-enqueuing, so the worst case is
- * an extra (idempotent, harmless) start-run re-send, never a run cut off while genuinely working.
+ * the row's insert time, not when it entered `running`/stayed `pending`. A run retried after
+ * `failed` reuses the same row, so a long-lived run that failed once and was restarted recently
+ * could in principle be reconciled sooner than 10 minutes of *this* attempt's own time in that
+ * status. That is judged acceptable: the no-active-jobs check is what actually gates re-enqueuing,
+ * so the worst case is an extra (idempotent, harmless) start-run re-send, never a run cut off while
+ * genuinely working.
+ *
+ * Past RUN_ABANDON_MS, "no live job" stops meaning "re-enqueue" and starts meaning "give up":
+ * without this a run every provider call keeps failing for (retries exhausted, or a human never
+ * comes back to fix a `failed` run's cause) gets re-sent roughly every 5 minutes forever. Failing
+ * it visibly is the same house philosophy as start-run's own failRun -- a run nothing can rescue
+ * ends in `failed` with a reason, not silent perpetual re-billing.
  */
 async function reconcileStuckRuns(db: Db, boss: PgBoss): Promise<void> {
-  const cutoff = new Date(Date.now() - RUN_STUCK_MS);
+  const stuckCutoff = new Date(Date.now() - RUN_STUCK_MS);
+  const abandonCutoff = new Date(Date.now() - RUN_ABANDON_MS);
   const stuck = await db.select({ run: evalRuns, organizationId: projects.organizationId })
     .from(evalRuns)
     .innerJoin(projects, eq(projects.id, evalRuns.projectId))
-    .where(and(eq(evalRuns.status, "running"), lt(evalRuns.createdAt, cutoff)));
+    .where(and(inArray(evalRuns.status, ["running", "pending"]), lt(evalRuns.createdAt, stuckCutoff)));
 
   for (const { run, organizationId } of stuck) {
-    if (run.completedJobs >= run.totalJobs) continue; // finishing naturally; recordProgress will land it
-    const active = await activeJobCount(db, "evaluate-question", "runId", run.id);
+    // totalJobs is 0 until start-run computes it, so this check only makes sense once a run has
+    // actually started fanning out -- a pending run's 0 >= 0 would otherwise look "finished".
+    if (run.status === "running" && run.completedJobs >= run.totalJobs) continue; // finishing naturally
+
+    const liveQueue = run.status === "pending" ? "start-run" : "evaluate-question";
+    const active = await activeJobCount(db, liveQueue, "runId", run.id);
     if (active > 0) continue; // still working
+
+    if (run.createdAt < abandonCutoff) {
+      const reason = run.status === "pending"
+        ? "run did not start within 24h and no start-run job is running -- a job likely exhausted " +
+          "its retries; re-create the run to retry"
+        : `run did not complete within 24h; ${run.completedJobs} of ${run.totalJobs} jobs finished ` +
+          "-- a job likely exhausted its retries; re-create the run to retry";
+      console.log(`reconcile: run ${run.id} abandoned (${run.status}, no live ${liveQueue} job) -- marking failed`);
+      await db.update(evalRuns).set({ status: "failed", error: reason }).where(eq(evalRuns.id, run.id));
+      continue;
+    }
+
     console.log(
-      `reconcile: run ${run.id} stuck running (${run.completedJobs}/${run.totalJobs} jobs, no ` +
-        "active evaluate-question jobs) -- re-enqueuing start-run",
+      `reconcile: run ${run.id} stuck ${run.status} (no active ${liveQueue} jobs) -- re-enqueuing start-run`,
     );
     // Same key start-run's own enqueuer uses (see apps/web's runs route): "exclusive" policy makes
     // a second send while one is already in flight a safe no-op, so a duplicate reconcile tick or a

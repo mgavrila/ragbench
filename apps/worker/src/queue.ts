@@ -37,11 +37,19 @@ export async function startWorker(opts: {
   handlers: Record<string, JobHandler<any>>;
   // Cron schedules to register once every named queue exists. pg-boss's `schedule` table has a
   // foreign key on queue name (see its plans.js), so a schedule for a queue not yet created throws
-  // "Queue X not found" -- registering these AFTER the createQueue loop below is what makes that
-  // safe regardless of call order in the caller.
+  // "Queue X not found". Registering these after the createQueue loop below guarantees that queue
+  // already exists PROVIDED its name is also a key in `handlers` above -- the only thing this
+  // function itself creates queues for. A schedule naming a queue this call never registers still
+  // fails with pg-boss's own "Queue not found", regardless of the order these two loops run in.
   schedules?: Array<{ name: string; cron: string }>;
 }) {
   const boss = new PgBoss(opts.databaseUrl);
+  // Without a listener, pg-boss's own EventEmitter throws synchronously on an unhandled "error"
+  // event (Node's default for EventEmitter) and takes the whole worker process down with it. The
+  // cron/maintenance loop this module relies on (createQueue's internal housekeeping, schedule()'s
+  // own tick supervisor) emits these on things like a transient connection drop -- exactly the kind
+  // of failure that should be logged and left to retry on its own, not crash the process.
+  boss.on("error", (err) => console.error("pg-boss error", err));
   // Sized for the fan-out: every concurrent evaluate-question job holds a connection for the whole
   // job (it queries around its provider calls, not only before them), so a pool smaller than the
   // concurrency makes jobs wait on connections instead of on the provider. The headroom covers the

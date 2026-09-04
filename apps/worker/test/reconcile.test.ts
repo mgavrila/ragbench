@@ -33,6 +33,9 @@ const recordingBoss = {
 function minutesAgo(n: number): Date {
   return new Date(Date.now() - n * 60_000);
 }
+function hoursAgo(n: number): Date {
+  return minutesAgo(n * 60);
+}
 
 async function run(overrides: Partial<{
   status: string; totalJobs: number; completedJobs: number; createdAt: Date;
@@ -118,6 +121,58 @@ describe("reconcileHandler", () => {
       sent = [];
       const r = await run({ createdAt: minutesAgo(2) });
       await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
+    });
+  });
+
+  describe("abandoned runs (past the 24h bound)", () => {
+    it("fails a running run past 24h with no live jobs instead of re-enqueuing", async () => {
+      sent = [];
+      const r = await run({ createdAt: hoursAgo(25) });
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, r.id));
+      expect(after.status).toBe("failed");
+      expect(after.error).toMatch(/did not complete within 24h/i);
+      expect(after.error).toMatch(/1 of 4 jobs finished/);
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
+    });
+
+    it("still re-enqueues an 11-minute-old run rather than failing it", async () => {
+      // Guards against an off-by-scope bug in the 24h check swallowing the ordinary stuck-run path.
+      sent = [];
+      const r = await run();
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, r.id));
+      expect(after.status).toBe("running");
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toHaveLength(1);
+    });
+  });
+
+  describe("stuck pending runs", () => {
+    it("re-enqueues start-run for a run stuck pending with no live start-run job", async () => {
+      sent = [];
+      const r = await run({ status: "pending", createdAt: minutesAgo(11) });
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([
+        { name: "start-run", data: { runId: r.id, organizationId: orgId }, opts: { singletonKey: r.id } },
+      ]);
+    });
+
+    it("does not re-enqueue when a start-run job is still live for the run", async () => {
+      sent = [];
+      const r = await run({ status: "pending", createdAt: minutesAgo(11) });
+      await liveBoss.send("start-run", { runId: r.id }, { singletonKey: `${r.id}:live` });
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
+    });
+
+    it("fails a pending run past 24h with no live start-run job instead of re-enqueuing", async () => {
+      sent = [];
+      const r = await run({ status: "pending", createdAt: hoursAgo(25) });
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, r.id));
+      expect(after.status).toBe("failed");
+      expect(after.error).toMatch(/did not start within 24h/i);
       expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
     });
   });

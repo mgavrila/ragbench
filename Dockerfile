@@ -63,9 +63,33 @@ FROM node:22-alpine AS runner
 # wget is what HEALTHCHECK below uses to hit /api/health; alpine's base image doesn't include it.
 # corepack is kept only so `pnpm db:migrate` works as a manual escape hatch inside the container
 # (see the header comment) -- neither the web nor the worker command below invokes pnpm itself.
+# Caveat: corepack does not bundle pnpm binaries in the base image, so the FIRST `pnpm ...`
+# invocation inside a running container (e.g. `docker compose exec worker pnpm db:migrate`) fetches
+# the pinned version from the npm registry on demand -- that first call needs outbound network
+# access from the container. Confirmed working end-to-end against a real compose deployment.
 RUN apk add --no-cache wget && corepack enable
 WORKDIR /app
 ENV NODE_ENV=production
+# pnpm defaults `verify-deps-before-run` to "install": before running ANY script (including
+# `db:migrate`) it compares node_modules against the lockfile and, on a mismatch, silently runs
+# `pnpm install --production` first. This image's node_modules is assembled by copying each
+# package's own tree in from the prod-deps stage (see below) rather than by a single `pnpm install`
+# at this exact path, which pnpm's own drift heuristic reads as "out of date" even though the
+# contents are correct -- confirmed by a real `pnpm db:migrate` failing with EACCES (that auto
+# `install` tried to write a temp file directly under /app, which USER node below cannot do). An
+# `.npmrc` setting the same key did NOT work here (pnpm did not pick it up from this location for
+# reasons not fully run down); the env var below is what was actually confirmed to fix it end to end
+# against a live `docker compose exec worker pnpm db:migrate`. Image-local rather than the repo's
+# own .npmrc/CI config -- dev and CI keep the real drift protection; this is correct here only
+# because the image's node_modules is never meant to be mutated after build.
+ENV pnpm_config_verify_deps_before_run=false
+
+# RAGBENCH_UPLOADS_DIR (docker-compose.prod.yml) points here, and the volume Docker creates for it
+# on first mount is root-owned -- USER node below cannot write to it (and therefore cannot write
+# any upload) unless the directory already exists with the right owner before that volume is
+# attached. Created here instead of relying on packages/db/src/files.ts's own mkdirSync: that call
+# happens well after the process has already dropped to the node user.
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
 
 # Web: output:"standalone" already prunes to exactly the node_modules this app uses, so it is
 # copied in as one self-contained tree under web/ rather than merged into a shared node_modules --
