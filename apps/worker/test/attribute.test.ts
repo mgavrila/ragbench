@@ -363,6 +363,43 @@ describe("attributeHandler counterfactual matrix", () => {
     expect(sentenceVectors).toEqual([]);
   });
 
+  // A counterfactual measured over a fraction of a set is not evidence about the alternative: a
+  // miss there could just be the chunks that never got vectors. Both alternate axes (a chunker's
+  // set and an alternate model on this set) are therefore held to the same completeness bar the
+  // config's own set now has to clear at run start.
+  it("reports a partly embedded alternate chunk set and model rather than ranking against half of one", async () => {
+    const headingChunks = await ctx.db.select({ id: chunks.id }).from(chunks)
+      .where(eq(chunks.chunkSetId, headingSetId));
+    const [droppedSetVector] = await ctx.db.delete(chunkEmbeddings)
+      .where(and(
+        eq(chunkEmbeddings.chunkId, headingChunks[0].id),
+        eq(chunkEmbeddings.model, "mock-embedding"),
+      )).returning();
+    const [fixedChunk] = await ctx.db.select({ id: chunks.id }).from(chunks)
+      .where(eq(chunks.chunkSetId, fixedSetId)).limit(1);
+    const [droppedModelVector] = await ctx.db.delete(chunkEmbeddings)
+      .where(and(eq(chunkEmbeddings.chunkId, fixedChunk.id), eq(chunkEmbeddings.model, ALT_MODEL)))
+      .returning();
+    try {
+      const result = await freshResult(q.intact);
+      await diagnose(result.id);
+      const cf = stored(await attributionFor(result.id));
+
+      expect(cf.skipped).toContain(
+        `chunker "${headingLabel()}": partially embedded ` +
+          `(${headingChunks.length - 1}/${headingChunks.length} chunks)`,
+      );
+      expect(cf.skipped).toContain(
+        `embedder "${ALT_MODEL}": partially embedded (${FIXED_SET_CHUNKS - 1}/${FIXED_SET_CHUNKS} chunks)`,
+      );
+      // Skipped means skipped here too: neither incomplete pair is recorded as a miss.
+      expect(cf.matrix.some((c) => c.label === headingLabel() || c.label === ALT_MODEL)).toBe(false);
+    } finally {
+      // Shared fixture: every later diagnosis in this file expects both to be complete again.
+      await ctx.db.insert(chunkEmbeddings).values([droppedSetVector, droppedModelVector]);
+    }
+  });
+
   it("clamps a deeper cutoff to the set size and skips the duplicate cell", async () => {
     // topK 8 in a 16-chunk set: 2x is a real 16-chunk retrieval, 4x (32) would return the same 16
     // rows, so it is reported as skipped rather than filling the matrix with a duplicate.

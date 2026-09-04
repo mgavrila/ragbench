@@ -139,8 +139,11 @@ async function gatherEvidence(
   // containing chunk that is missing from the ordering -- goldInSingleChunk true alongside
   // bestGoldRank null. decideVerdict handles that shape without crashing (it falls through to
   // `unanswerable`, or to whatever a counterfactual recovers), so the failure mode is a misleading
-  // verdict on a half-built set, not an exception. Surfacing partial embedding properly is parked
-  // for plan 6; this job deliberately does not paper over it by re-embedding anything.
+  // verdict on a half-built set, not an exception. startRunHandler now refuses to start a run whose
+  // config points at a partly embedded set, so a result reaching this job was produced against a
+  // complete one; the counterfactual sections below apply the same completeness check to every
+  // ALTERNATE set and model, and report the incomplete ones as skipped rather than ranking against
+  // a fraction of a set. This job still embeds nothing to fill a hole.
   const overlapping = await db.select({
     id: chunks.id, startOffset: chunks.startOffset, endOffset: chunks.endOffset,
   })
@@ -178,19 +181,38 @@ async function gatherEvidence(
     // Oldest first, so the matrix reads in the order the user built their chunk sets and two runs
     // of the same diagnose produce the same table.
     .orderBy(chunkSets.createdAt, chunkSets.id);
-  const embeddedSetIds = new Set(
-    otherSets.length === 0 ? [] : (await db.selectDistinct({ id: chunks.chunkSetId })
+  // Per-set chunk and vector counts rather than a bare "has at least one vector" probe: a set whose
+  // embed job died halfway ranks only the fraction of its chunks that got vectors, and a chunker
+  // counterfactual measured over a fraction of a set is not evidence about the chunker -- a miss
+  // there could just be the missing half. Counting is safe over this left join because
+  // chunk_embeddings is unique on (chunk_id, model), so the join cannot multiply a chunk's row.
+  const setCoverage = new Map<string, { total: number; embedded: number }>(
+    (otherSets.length === 0 ? [] : await db.select({
+      id: chunks.chunkSetId,
+      total: sql<number>`count(*)`.mapWith(Number),
+      embedded: sql<number>`count(${chunkEmbeddings.chunkId})`.mapWith(Number),
+    })
       .from(chunks)
-      .innerJoin(chunkEmbeddings, eq(chunkEmbeddings.chunkId, chunks.id))
-      .where(and(
-        inArray(chunks.chunkSetId, otherSets.map((s) => s.id)),
+      .leftJoin(chunkEmbeddings, and(
+        eq(chunkEmbeddings.chunkId, chunks.id),
         eq(chunkEmbeddings.model, config.embeddingModel),
-      ))).map((r) => r.id),
+      ))
+      .where(inArray(chunks.chunkSetId, otherSets.map((s) => s.id)))
+      .groupBy(chunks.chunkSetId)).map((r) => [r.id, { total: r.total, embedded: r.embedded }]),
   );
   for (const other of otherSets) {
     const label = chunkSetLabel(other);
-    if (!embeddedSetIds.has(other.id)) {
+    const coverage = setCoverage.get(other.id);
+    // No row at all means the set has no chunks yet, which is indistinguishable from unembedded
+    // here: either way there is nothing of this set to rank.
+    if (!coverage || coverage.embedded === 0) {
       skipped.push(`chunker "${label}": not embedded with ${config.embeddingModel}`);
+      continue;
+    }
+    if (coverage.embedded < coverage.total) {
+      skipped.push(
+        `chunker "${label}": partially embedded (${coverage.embedded}/${coverage.total} chunks)`,
+      );
       continue;
     }
     const rows = await retrieveTopK(db, {
@@ -200,17 +222,33 @@ async function gatherEvidence(
   }
 
   // ---- counterfactual: same chunk set and k, a different embedder ----
-  const embeddedModels = (await db.selectDistinct({ model: chunkEmbeddings.model })
+  // Counted per model, not merely enumerated, for the same reason as the chunk sets above: a model
+  // with vectors for some of this set's chunks ranks against a fraction of the set, which is not a
+  // fair comparison with the config's own model.
+  const modelCoverage = await db.select({
+    model: chunkEmbeddings.model,
+    embedded: sql<number>`count(*)`.mapWith(Number),
+  })
     .from(chunkEmbeddings)
     .innerJoin(chunks, eq(chunkEmbeddings.chunkId, chunks.id))
-    .where(eq(chunks.chunkSetId, set.id))).map((r) => r.model);
+    .where(eq(chunks.chunkSetId, set.id))
+    .groupBy(chunkEmbeddings.model);
+  const embeddedModels = modelCoverage.map((r) => r.model);
+  const embeddedCount = new Map(modelCoverage.map((r) => [r.model, r.embedded]));
   // Sorted so the matrix order does not depend on which model happened to be embedded first.
   for (const model of embeddedModels.filter((m) => m !== config.embeddingModel).sort()) {
     // A model with vectors in the database but no registry entry (removed in a later release, say)
     // would make makeEmbedder throw a plain Error and burn every retry of this job on something no
-    // retry can fix. It is missing evidence, so it is reported like any other missing cell.
+    // retry can fix. It is missing evidence, so it is reported like any other missing cell. Checked
+    // before the completeness check below: an unusable model is unusable at any coverage, and
+    // naming the registry is the more actionable of the two messages.
     if (!lookupEmbeddingModel(model)) {
       skipped.push(`embedder "${model}": not a known embedding model`);
+      continue;
+    }
+    const embedded = embeddedCount.get(model) ?? 0;
+    if (embedded < totalChunks) {
+      skipped.push(`embedder "${model}": partially embedded (${embedded}/${totalChunks} chunks)`);
       continue;
     }
     let vector: number[];
@@ -309,6 +347,9 @@ export const attributeHandler = async (
 ): Promise<void> => {
   // One attribution per result: a re-delivered job (pg-boss is at-least-once) must not pay for a
   // second matrix, and re-diagnosing cannot change a verdict computed from the same rows anyway.
+  // This read is the CHEAP path -- it is what stops the second delivery spending on a second matrix
+  // -- not the guarantee. Two deliveries can both read "no row yet" before either inserts, so the
+  // insert at the end of this handler is guarded by the unique index on attributions.result_id.
   const [existing] = await db.select({ id: attributions.id })
     .from(attributions).where(eq(attributions.resultId, resultId));
   if (existing) return;
@@ -381,5 +422,10 @@ export const attributeHandler = async (
   }
 
   const counterfactuals: StoredCounterfactuals = { matrix, skipped, rule, signals };
-  await db.insert(attributions).values({ resultId, verdict, counterfactuals, explanation, evidenceChunkIds });
+  // The loser of a race between two concurrent diagnoses of one result writes nothing rather than
+  // failing the job: both computed a verdict from the same rows, so the row already there is the
+  // same answer this one would have written (see the unique index on attributions.result_id).
+  await db.insert(attributions)
+    .values({ resultId, verdict, counterfactuals, explanation, evidenceChunkIds })
+    .onConflictDoNothing();
 };

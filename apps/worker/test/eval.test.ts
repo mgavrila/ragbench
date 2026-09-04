@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
-  createDb, organizations, projects, documents, chunkSets, chunks, evalRunConfigs, evalRuns,
-  questionResults, ragConfigs, testQuestions, testSets, usageLog,
+  createDb, organizations, projects, documents, chunkEmbeddings, chunkSets, chunks, evalRunConfigs,
+  evalRuns, questionResults, ragConfigs, testQuestions, testSets, usageLog,
 } from "@ragbench/db";
 import { ProviderError, hashParams, makeEmbedder, makeLLM } from "@ragbench/core";
 import { chunkHandler } from "../src/handlers/chunk";
@@ -187,6 +187,48 @@ describe("startRunHandler", () => {
     expect(after.status).toBe("failed");
     expect(after.error).toContain("unembedded");
     expect(after.error).toContain("text-embedding-3-small");
+  });
+
+  // The half-embedded set is the case a bare "has at least one vector" probe waved through: the run
+  // would go ahead ranking against whichever chunks happened to get vectors, and every question
+  // whose answer lives in the rest would miss for a reason that has nothing to do with the config.
+  it("fails the run, naming the counts, when a config's chunk set is only partly embedded", async () => {
+    const params = { maxTokens: 6, overlapTokens: 1 };
+    const [partial] = await ctx.db.insert(chunkSets).values({
+      projectId, chunker: "fixed", params, paramsHash: hashParams(params),
+    }).returning();
+    await chunkHandler({ chunkSetId: partial.id }, { db: ctx.db, boss: recordingBoss });
+    await embedHandler(
+      { chunkSetId: partial.id, model: "mock-embedding", organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+    );
+    const setChunks = await ctx.db.select({ id: chunks.id }).from(chunks)
+      .where(eq(chunks.chunkSetId, partial.id));
+    expect(setChunks.length).toBeGreaterThan(1);
+    // One vector short: exactly the state an embed job that died partway leaves behind.
+    await ctx.db.delete(chunkEmbeddings).where(eq(chunkEmbeddings.chunkId, setChunks[0].id));
+
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name: "half-embedded", chunkSetId: partial.id,
+      embeddingModel: "mock-embedding", topK: 2,
+    }).returning();
+    const run = await makeRun("retrieval-only");
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+
+    sentJobs.length = 0;
+    await expect(startRunHandler(
+      { runId: run.id, organizationId: orgId },
+      { db: ctx.db, boss: recordingBoss },
+    )).resolves.toBeUndefined();
+
+    expect(evalJobs()).toHaveLength(0);
+    const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
+    expect(after.status).toBe("failed");
+    expect(after.error).toContain("half-embedded");
+    expect(after.error).toContain(`only ${setChunks.length - 1} of ${setChunks.length} chunks`);
+    // The message names the chunk set the way the rest of the product does, not by uuid.
+    expect(after.error).toContain(`fixed (${hashParams(params).slice(0, 8)})`);
+    expect(after.error).toContain("mock-embedding");
   });
 
   it("fails the run, naming the config and the value, when a config's topK is below 1", async () => {

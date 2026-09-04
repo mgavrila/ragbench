@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { createDb, migrateDb } from "../src/client";
-import { organizations, projects, chunkEmbeddings, chunkSets, chunks, documents, testSets } from "../src/schema";
+import {
+  attributions, organizations, projects, chunkEmbeddings, chunkSets, chunks, documents, evalRuns,
+  questionResults, ragConfigs, testQuestions, testSets,
+} from "../src/schema";
 
 const URL = process.env.TEST_DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench_test";
 let ctx: Awaited<ReturnType<typeof createDb>>;
@@ -72,6 +75,49 @@ describe("schema", () => {
     expect(set.status).toBe("generating");
     expect(set.error).toBeNull();
     expect(set.questionsTarget).toBe(30);
+  });
+
+  // attributeHandler's read-then-insert check is a cost fast path, not a guarantee: two deliveries
+  // of one attribute job can both read "no row yet" before either inserts. The unique index is what
+  // makes the duplicate impossible, and onConflictDoNothing is what makes losing that race a no-op
+  // rather than a failed (and retried, and re-billed) job.
+  it("allows only one attribution per result", async () => {
+    const [org] = await ctx.db.insert(organizations).values({ name: "attr-org" }).returning();
+    const [proj] = await ctx.db.insert(projects)
+      .values({ organizationId: org.id, name: "attr-proj" }).returning();
+    const [doc] = await ctx.db.insert(documents).values({
+      projectId: proj.id, filename: "a.md", mime: "text/markdown", contentHash: "attr-h",
+      text: "hello world", status: "ready",
+    }).returning();
+    const [set] = await ctx.db.insert(chunkSets).values({
+      projectId: proj.id, chunker: "fixed", params: { size: 1 }, paramsHash: "attr-ph",
+    }).returning();
+    const [config] = await ctx.db.insert(ragConfigs).values({
+      projectId: proj.id, name: "cfg", chunkSetId: set.id, embeddingModel: "mock-embedding", topK: 1,
+    }).returning();
+    const [testSet] = await ctx.db.insert(testSets).values({
+      projectId: proj.id, name: "ts", generatorModel: "mock-llm", status: "ready",
+    }).returning();
+    const [question] = await ctx.db.insert(testQuestions).values({
+      testSetId: testSet.id, documentId: doc.id, question: "q?", goldAnswer: "hello",
+      goldStart: 0, goldEnd: 5,
+    }).returning();
+    const [run] = await ctx.db.insert(evalRuns)
+      .values({ projectId: proj.id, testSetId: testSet.id, mode: "retrieval-only" }).returning();
+    const [result] = await ctx.db.insert(questionResults).values({
+      runId: run.id, configId: config.id, questionId: question.id, hit: false, status: "done",
+    }).returning();
+
+    const row = { resultId: result.id, verdict: "chunking", counterfactuals: { matrix: [] } };
+    await ctx.db.insert(attributions).values(row);
+    await expect(ctx.db.insert(attributions).values({ ...row, verdict: "retrieval" }))
+      .rejects.toThrow();
+    await ctx.db.insert(attributions).values({ ...row, verdict: "retrieval" }).onConflictDoNothing();
+
+    const stored = await ctx.db.select().from(attributions)
+      .where(eq(attributions.resultId, result.id));
+    expect(stored).toHaveLength(1);
+    expect(stored[0].verdict).toBe("chunking"); // the first write wins; the loser changes nothing
   });
 
   it("accepts a docsFingerprint on chunk_sets", async () => {

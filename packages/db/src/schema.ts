@@ -201,4 +201,11 @@ export const attributions = pgTable("attributions", {
   explanation: text("explanation"),
   evidenceChunkIds: jsonb("evidence_chunk_ids").$type<string[]>(),
   createdAt: createdAt(),
-}, (t) => [index("attributions_result_idx").on(t.resultId)]);
+}, (t) => [
+  // One attribution per result, enforced by the database rather than only by attributeHandler's
+  // read-then-insert check. That check is a fast path, not a guarantee: two deliveries of the same
+  // attribute job can both read "no row yet" before either inserts, and the duplicate they would
+  // write is a second verdict for one result -- which of the two the UI shows would then depend on
+  // row order. The handler inserts with onConflictDoNothing, so losing that race is a no-op.
+  uniqueIndex("attributions_result_idx").on(t.resultId),
+]);
