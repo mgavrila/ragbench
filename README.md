@@ -125,7 +125,7 @@ Any key you don't set simply makes its models unavailable in the UI; the rest of
 | Env var | Required | Default | Notes |
 |---|---|---|---|
 | `DATABASE_URL` | Prod: yes. Dev: no | dev falls back to `postgres://ragbench:ragbench@localhost:5433/ragbench` | Falls back only outside `NODE_ENV=production`; a production deploy with this unset fails loudly at boot rather than silently reaching for localhost. |
-| `AUTH_SECRET` | Prod: yes. Dev: no | dev default `change-me` (see `.env.example`) | next-auth v5 refuses to start in production without a real secret. Generate one with `openssl rand -base64 32`. |
+| `AUTH_SECRET` | Prod: yes. Dev: no | none — unset is fine | next-auth v5 only refuses to start without a real secret in production; in dev it runs with no `AUTH_SECRET` set at all (the quickstart above never creates a `.env`). `.env.example` ships a `change-me` placeholder for convenience, not a code-level default. Generate a real one for prod with `openssl rand -hex 32`. |
 | `AUTH_TRUST_HOST` | Prod: yes (behind a proxy) | unset | next-auth only trusts the incoming `Host` header when this is set — required whenever the app sits behind a reverse proxy or load balancer. Not needed for `pnpm dev` on localhost. |
 | `RAGBENCH_UPLOADS_DIR` | No | `<cwd>/uploads` | Where uploaded documents are stored. The web app writes here and the worker reads from here, so both processes must resolve it to the same directory — set explicitly whenever they run from different working directories (e.g. the prod Docker image sets it to `/app/uploads`). |
 | `RAGBENCH_EVAL_CONCURRENCY` | No | `4` | How many `evaluate-question` jobs the worker runs at once, clamped to `1..8`. Every other job queue stays serial regardless of this value. A missing or non-numeric value falls back to the default rather than failing startup. |
@@ -144,13 +144,13 @@ See [`.env.example`](.env.example) for the same list with inline comments.
 
 ```bash
 # .env next to docker-compose.prod.yml (docker compose reads it automatically):
-#   POSTGRES_PASSWORD=$(openssl rand -base64 24)
-#   AUTH_SECRET=$(openssl rand -base64 32)
+#   POSTGRES_PASSWORD=$(openssl rand -hex 32)
+#   AUTH_SECRET=$(openssl rand -hex 32)
 
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-- `AUTH_SECRET` has **no default** in prod — the compose file fails to start without it. Generate with `openssl rand -base64 32`.
+- `AUTH_SECRET` has **no default** in prod — the compose file fails to start without it. Generate with `openssl rand -hex 32`.
 - `AUTH_TRUST_HOST=1` is set for you in `docker-compose.prod.yml`, matching a deploy that sits behind a reverse proxy.
 - Create your first account at `/signup`, then set `DISABLE_SIGNUP=1` in the compose file's environment and redeploy to close the signup route.
 - The worker runs `migrateDb()` in-process on boot, so a fresh database heals itself. A manual migration is still available as an escape hatch: `docker compose -f docker-compose.prod.yml exec worker pnpm db:migrate` — note this is the *first* `pnpm` invocation inside the running container, so it needs outbound network access to fetch the pinned pnpm version via corepack.

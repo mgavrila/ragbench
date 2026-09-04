@@ -8,12 +8,13 @@ import type { Session } from "next-auth";
 import type { StoredCounterfactuals } from "@/lib/attribution";
 
 /**
- * Polling contract (task-2-report.md): `attributions` has no failed/pending state of its own -- a
- * diagnose that never started, is still running, or failed non-retryably (silent, per ruling) all
- * read back the same way here: `{ attribution: null }`. The UI's recovery path is re-clicking
- * Diagnose after a bounded wait, not distinguishing those cases from this response. `resultStatus`
- * rides along so the caller can still say something about the cell (e.g. "still evaluating") while
- * attribution stays null, without a second round trip.
+ * Polling contract: `attributions` has no failed/pending state of its own -- a diagnose that never
+ * started, is still running, or failed non-retryably (silent, per ruling) all read back the same
+ * way here: `{ attribution: null }`. The UI's recovery path is re-clicking Diagnose after a bounded
+ * wait, not distinguishing those cases from this response. `resultStatus` rides along so the caller
+ * can still say something about the cell (e.g. "still evaluating") while attribution stays null,
+ * without a second round trip. See `StoredCounterfactuals` (apps/worker/src/handlers/attribute.ts)
+ * for what actually lands in `attributions.counterfactuals`.
  */
 export async function getAttribution(resultId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });

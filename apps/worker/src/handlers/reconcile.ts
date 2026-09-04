@@ -42,14 +42,19 @@ async function activeJobCount(
 }
 
 /**
- * A run whose worker died mid-flight, in either of the two states that leaves it stranded:
+ * A run whose worker died mid-flight, in any of the three states that leaves it stranded:
  *  - `running`, not yet complete, no evaluate-question job in flight -- start-run itself finished
  *    the fan-out but the jobs it created never all landed (see start-run.ts's contract for
  *    `totalJobs`/`completedJobs` and the evaluate-question payload's `runId`).
  *  - `pending`, no start-run job in flight -- the route that creates a run enqueues start-run
  *    immediately (see apps/web's runs route), so a pending run with nothing live for it means that
  *    very first job never ran at all (send failed, or the worker died before picking it up).
- * Both read as "no retry could still be coming" the same way: if pg-boss shows nothing
+ *  - `running`, every job actually done (`completedJobs >= totalJobs`), no evaluate-question job in
+ *    flight -- recordProgress (evaluate-question.ts) writes the completedJobs count and flips
+ *    status to `done` in two separate, un-transacted statements; a worker that dies between them
+ *    leaves the run exactly here, permanently. This one does not mean "re-enqueue" (there is
+ *    nothing left to run) -- it means finish the flip the interrupted job never made.
+ * All three read as "no retry could still be coming" the same way: if pg-boss shows nothing
  * created/retrying/active for this runId on the queue that would be advancing it, nothing is.
  *
  * Age is read off `createdAt` (eval_runs has no `updatedAt` -- see schema.ts) even though that is
@@ -75,12 +80,22 @@ async function reconcileStuckRuns(db: Db, boss: PgBoss): Promise<void> {
     .where(and(inArray(evalRuns.status, ["running", "pending"]), lt(evalRuns.createdAt, stuckCutoff)));
 
   for (const { run, organizationId } of stuck) {
-    // totalJobs is 0 until start-run computes it, so this check only makes sense once a run has
-    // actually started fanning out -- a pending run's 0 >= 0 would otherwise look "finished".
-    if (run.status === "running" && run.completedJobs >= run.totalJobs) continue; // finishing naturally
-
     const liveQueue = run.status === "pending" ? "start-run" : "evaluate-question";
     const active = await activeJobCount(db, liveQueue, "runId", run.id);
+
+    // totalJobs is 0 until start-run computes it, so this check only makes sense once a run has
+    // actually started fanning out -- a pending run's 0 >= 0 would otherwise look "finished".
+    if (run.status === "running" && run.totalJobs > 0 && run.completedJobs >= run.totalJobs) {
+      if (active > 0) continue; // still finishing naturally -- the last job(s) are still landing
+      // Every job is done and none are still live, yet the run itself never flipped to `done` --
+      // recordProgress died between its two statements (see the docstring above). Guarded on
+      // `running` so a run cancelled in the same window is not resurrected.
+      console.log(`reconcile: run ${run.id} completed all ${run.totalJobs} jobs but never flipped to done -- marking done`);
+      await db.update(evalRuns).set({ status: "done" })
+        .where(and(eq(evalRuns.id, run.id), eq(evalRuns.status, "running")));
+      continue;
+    }
+
     if (active > 0) continue; // still working
 
     if (run.createdAt < abandonCutoff) {

@@ -16,7 +16,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
  * query -- a reproducible, deterministic miss at topK 1 (and a reproducible hit at topK 5), which
  * is what gives the run's grid both a hit and a miss to exercise Diagnose against. Confirmed by
  * simulating chunkFixed/samplePassages/mockGenerateQa/hashEmbed directly over this file before
- * wiring up the browser flow (see task-3-report.md).
+ * wiring up the browser flow.
  */
 
 const SCREENSHOT_DIR = join(__dirname, "screenshots");

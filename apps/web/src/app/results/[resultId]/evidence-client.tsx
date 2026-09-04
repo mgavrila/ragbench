@@ -29,8 +29,9 @@ type Props = {
 const WINDOW_PAD = 2000;
 const POLL_INTERVAL_MS = 2000;
 // Bounded so a stuck poll re-enables Diagnose instead of spinning forever -- a diagnose that never
-// completes is documented as "no row, ever" (silent failure, task-2-report.md); re-clicking is the
-// only recovery path, so the UI must hand control back to the user rather than waiting indefinitely.
+// completes is "no row, ever" (silent failure, by design -- see the polling contract in
+// apps/web/src/app/api/results/[resultId]/attribution/route.ts); re-clicking is the only recovery
+// path, so the UI must hand control back to the user rather than waiting indefinitely.
 const POLL_TIMEOUT_MS = 30000;
 
 /** The gold highlight, as references to the tokens `.rb-doc mark` is painted from -- the legend

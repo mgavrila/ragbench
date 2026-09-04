@@ -30,7 +30,7 @@ pnpm e2e          # Playwright, demo mode (mock providers only)
 
 `pnpm test` and `pnpm e2e` each use their own database (`TEST_DATABASE_URL`, default `ragbench_test`; `E2E_DATABASE_URL`, default `ragbench_e2e`), separate from the dev database and from each other. Both are created and migrated automatically the first time you run the corresponding command — no manual setup needed.
 
-**Gotcha:** if you have a `pnpm --filter @ragbench/worker dev` process running from the dev setup above, stop it before running `pnpm test`. The worker test suite runs real pg-boss queues against `ragbench_test`; a dev worker polling the same database will pick up jobs the tests are waiting on and the suite will hang or flake. `pkill -f "tsx watch src/main.ts"` (or just Ctrl-C the terminal it's running in) before `pnpm test` avoids this.
+You do not need to stop a `pnpm --filter @ragbench/worker dev` process before running `pnpm test` or `pnpm e2e`: each suite creates and migrates its own database (`ragbench_test` / `ragbench_e2e`) on first run, distinct from the dev database the worker polls, so `pnpm dev` can keep running while tests execute.
 
 ## Pull requests
 

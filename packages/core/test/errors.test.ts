@@ -68,6 +68,16 @@ describe("provider error taxonomy", () => {
     expect(toProviderError("openai", buried).message).not.toContain("SECRET");
   });
 
+  it("redacts a Google (AIza-prefixed) key the same way", () => {
+    // Defense-in-depth: the Gemini SDK sends the key in a header rather than the body, so this
+    // shape is not expected to come back from a real error, but the pattern covers it anyway.
+    const leaked = new Error("400 API key not valid: AIzaSyD-9vN3kR7wXyZ0aBcDeFgHiJkLmNoPqRs rejected");
+    const message = toProviderError("gemini", leaked).message;
+    expect(message).toContain("AIza***");
+    expect(message).not.toContain("9vN3kR7wXyZ0");
+    expect(message).toBe("400 API key not valid: AIza*** rejected");
+  });
+
   it("leaves an ordinary message exactly as the provider wrote it", () => {
     const plain = new Error("model gpt-4o-mini does not support this endpoint");
     expect(toProviderError("openai", plain).message)

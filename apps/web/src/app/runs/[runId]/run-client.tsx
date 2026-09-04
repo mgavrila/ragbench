@@ -77,7 +77,9 @@ const DEFAULT_ATTR_STATE: AttrState = { attribution: null, posting: false, polli
 
 const POLL_INTERVAL_MS = 2000;
 // Bounded so a diagnose that never resolves (silent-failure ruling: a non-retryable embed failure
-// writes no row at all, task-2-report.md) re-enables the button instead of spinning forever.
+// writes no row at all -- see the polling contract in
+// apps/web/src/app/api/results/[resultId]/attribution/route.ts) re-enables the button instead of
+// spinning forever.
 const POLL_TIMEOUT_MS = 30000;
 
 function fmtPct(v: number | null): string {

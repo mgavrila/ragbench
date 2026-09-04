@@ -11,7 +11,7 @@ import type { Session } from "next-auth";
  * Org-scoped outside `/projects/:projectId`: walk result -> run -> project -> organizationId, same
  * chain as the run detail and cell drill-down routes. `organizationId` in the enqueued payload comes
  * from THIS chain, never from the request body -- the worker uses it only for usage metering, never
- * for scoping (task-2-report.md).
+ * for scoping.
  */
 export async function diagnoseResult(
   resultId: string, session: Session | null,
@@ -54,9 +54,9 @@ export async function diagnoseResult(
   }
 
   try {
-    // singletonKey = resultId is MANDATORY (task-2-report.md): the `attribute` queue is exclusive-
-    // policy on this key, which -- together with the handler's read-then-insert check -- is what
-    // keeps a second click from racing a duplicate row into `attributions`.
+    // singletonKey = resultId is MANDATORY: the `attribute` queue is exclusive-policy on this key,
+    // which -- together with the handler's read-then-insert check -- is what keeps a second click
+    // from racing a duplicate row into `attributions`.
     await send("attribute", { resultId, organizationId: owner.organizationId }, resultId);
   } catch (err) {
     // No row of our own to roll back (the worker writes `attributions`, not this route) -- unlike

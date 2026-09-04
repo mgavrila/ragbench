@@ -110,10 +110,25 @@ describe("reconcileHandler", () => {
       expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
     });
 
-    it("does not re-enqueue a run whose jobs have all completed", async () => {
+    it("marks a run done when every job completed but the run never flipped from running", async () => {
+      // recordProgress (evaluate-question.ts) writes completedJobs and flips status to `done` in
+      // two separate, un-transacted statements; this seeds exactly what a worker dying between
+      // them leaves behind -- completedJobs >= totalJobs, status still `running`, nothing live.
       sent = [];
       const r = await run({ totalJobs: 4, completedJobs: 4 });
       await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, r.id));
+      expect(after.status).toBe("done");
+      expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
+    });
+
+    it("leaves a 100%-complete run untouched while an evaluate-question job is still live", async () => {
+      sent = [];
+      const r = await run({ totalJobs: 4, completedJobs: 4 });
+      await liveBoss.send("evaluate-question", { runId: r.id }, { singletonKey: `${r.id}:live` });
+      await reconcileHandler({}, { db: ctx.db, boss: recordingBoss });
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, r.id));
+      expect(after.status).toBe("running");
       expect(sent.filter((s) => (s.data as { runId?: string }).runId === r.id)).toEqual([]);
     });
 

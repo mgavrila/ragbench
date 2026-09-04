@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# Least privilege: this workflow only checks out the repo and runs tests, so the default GITHUB_TOKEN
+# grants it nothing beyond read access to the repo contents.
+permissions:
+  contents: read
+
 # A push replacing an in-flight run's commit (a fast rebase, a force-push) cancels the stale run
 # instead of racing it to the same PR checks.
 concurrency:

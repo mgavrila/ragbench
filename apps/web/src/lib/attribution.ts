@@ -10,8 +10,8 @@ export type StoredSignals = AttributionSignals & { bestGoldScore: number | null 
 /**
  * Mirrors `StoredCounterfactuals` from apps/worker/src/handlers/attribute.ts, which is what actually
  * lands in `attributions.counterfactuals` (jsonb). apps/web cannot import from apps/worker, so this
- * is a deliberate, pinned-by-contract redeclaration (see task-2-report.md's "Contracts for Task 3") --
- * keep it in sync with the worker type if that shape ever changes.
+ * is a deliberate, pinned-by-contract redeclaration -- keep it in sync with the worker type if that
+ * shape ever changes.
  */
 export type StoredCounterfactuals = {
   matrix: Counterfactual[];

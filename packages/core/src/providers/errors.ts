@@ -26,15 +26,19 @@ const TRANSIENT_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EAI
  *
  * Secrets: some SDKs include the offending Authorization header or key prefix in the message. An
  * API key that reaches a database row is an API key in every backup and screenshot of it, so
- * anything shaped like one is replaced before the message is ever stored. The character class
- * includes `_` because both vendors' keys are base64url (`sk-proj-...`, `sk-ant-...`), and a class
- * without it stops matching at the first underscore -- leaving the rest of the key readable.
+ * anything shaped like one is replaced before the message is ever stored. Covers OpenAI/Anthropic
+ * keys (`sk-proj-...`, `sk-ant-...`) and Google keys (`AIza...`). The character class includes `_`
+ * because these are base64url, and a class without it stops matching at the first underscore --
+ * leaving the rest of the key readable. This is defense-in-depth for Google specifically: the
+ * Gemini SDK sends the key in a header, not the request body, so it is not expected to come back
+ * in an error message the way an OpenAI/Anthropic key sometimes does -- but redacting it here costs
+ * nothing and covers the case if that ever changes.
  */
 const MAX_MESSAGE_LENGTH = 300;
-const API_KEY_PATTERN = /sk-[A-Za-z0-9_*-]+/g;
+const API_KEY_PATTERN = /(sk-[A-Za-z0-9_*-]+|AIza[A-Za-z0-9_-]{10,})/g;
 
 function sanitizeMessage(message: string): string {
-  const redacted = message.replace(API_KEY_PATTERN, "sk-***");
+  const redacted = message.replace(API_KEY_PATTERN, (m) => (m.startsWith("AIza") ? "AIza***" : "sk-***"));
   // Redact first, then truncate, so the redaction never has to reason about where the cut landed.
   // The ellipsis counts against the cap: the result is never longer than MAX_MESSAGE_LENGTH.
   return redacted.length > MAX_MESSAGE_LENGTH
