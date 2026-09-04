@@ -6,6 +6,7 @@ import { embedHandler } from "./handlers/embed";
 import { generateTestsetHandler } from "./handlers/generate-testset";
 import { startRunHandler } from "./handlers/start-run";
 import { evaluateQuestionHandler } from "./handlers/evaluate-question";
+import { attributeHandler } from "./handlers/attribute";
 
 const databaseUrl = process.env.DATABASE_URL ?? "postgres://ragbench:ragbench@localhost:5433/ragbench";
 
@@ -24,8 +25,9 @@ const { stop } = await startWorker({
     "generate-testset": generateTestsetHandler,
     "start-run": startRunHandler,
     "evaluate-question": evaluateQuestionHandler,
-    // remaining pipeline handlers land here in later plans:
-    // attribute
+    // Stays at the default localConcurrency of 1 (see queue.ts): diagnose is user-paced, one click
+    // per result, and every job is keyed by its resultId, so there is nothing to fan out.
+    attribute: attributeHandler,
   },
 });
 // The web app writes uploads here and this process reads them; if the two resolve
