@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A push replacing an in-flight run's commit (a fast rebase, a force-push) cancels the stale run
+# instead of racing it to the same PR checks.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ragbench
+          POSTGRES_PASSWORD: ragbench
+          POSTGRES_DB: ragbench
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ragbench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Read by every vitest suite's own global-setup.ts (packages/db's setupTestDatabase
+      # create-if-absent pattern) and by each *.test.ts file, which points its own DATABASE_URL at
+      # this before importing any app code that calls getDb(). Created and migrated by the suites
+      # themselves against the superuser above -- nothing here pre-creates ragbench_test.
+      TEST_DATABASE_URL: postgres://ragbench:ragbench@localhost:5432/ragbench_test
+      DATABASE_URL: postgres://ragbench:ragbench@localhost:5432/ragbench_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm test
+
+  e2e:
+    name: e2e (demo mode)
+    runs-on: ubuntu-latest
+    # Waits on `test` rather than running in parallel: there's no point burning CI minutes on a
+    # full browser run against code that fails to typecheck or already broke a unit test.
+    needs: test
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ragbench
+          POSTGRES_PASSWORD: ragbench
+          POSTGRES_DB: ragbench
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ragbench"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # e2e/prepare-db.ts and playwright.config.ts both read this (e2e/env.ts) -- deliberately its
+      # own database, never TEST_DATABASE_URL or the dev DATABASE_URL, so a demo-mode run can never
+      # collide with the vitest suites' own database even when both jobs run at once.
+      E2E_DATABASE_URL: postgres://ragbench:ragbench@localhost:5432/ragbench_e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm e2e:install
+
+      - run: pnpm e2e
+
+      - name: Upload trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
