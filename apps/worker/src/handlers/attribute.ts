@@ -44,11 +44,28 @@ export type StoredCounterfactuals = {
   skipped: string[];
   /** The `rule` name decideVerdict matched (stable identifier, see packages/core/src/attribution.ts). */
   rule: string;
-  signals: AttributionSignals;
+  signals: StoredSignals;
+};
+
+/**
+ * The signals as STORED, a superset of core's AttributionSignals.
+ *
+ * `bestGoldScore` is deliberately not part of AttributionSignals: decideVerdict does not consume it,
+ * and adding a field to the type that drives the decision table would imply it does. It is evidence
+ * for a reader, not input to a verdict -- the similarity the best gold-overlapping chunk actually
+ * achieved, which is what turns "ranked 6th" into "ranked 6th at 0.34 while the winner scored 0.41"
+ * (spec 7.1's semantic gap). The evidence view renders it; nothing branches on it.
+ */
+export type StoredSignals = AttributionSignals & {
+  /**
+   * Similarity score of the row `bestGoldRank` points at in the full ordering. Null exactly when
+   * bestGoldRank is null (no chunk in the set overlaps the gold span).
+   */
+  bestGoldScore: number | null;
 };
 
 type Evidence = {
-  signals: AttributionSignals;
+  signals: StoredSignals;
   matrix: Counterfactual[];
   skipped: string[];
   evidenceChunkIds: string[];
@@ -174,6 +191,10 @@ async function gatherEvidence(
     chunkSetId: set.id, model: config.embeddingModel, queryEmbedding, k: totalChunks,
   });
   const bestGoldRank = scoreAgainstGold(full, gold).rank;
+  // The score of the row that rank points at -- ranks are 1-based over this same ordering, so the
+  // lookup is exact rather than a second search. Read here rather than recomputed later because
+  // `full` is the only place the scores exist: question_results stores only the top-k slice.
+  const bestGoldScore = bestGoldRank === null ? null : full[bestGoldRank - 1]?.score ?? null;
 
   // ---- counterfactual: same embedder and k, a different chunker ----
   const otherSets = await db.select().from(chunkSets)
@@ -318,7 +339,7 @@ async function gatherEvidence(
   ])];
 
   return {
-    signals: { goldInSingleChunk, bestGoldRank, k: config.topK },
+    signals: { goldInSingleChunk, bestGoldRank, k: config.topK, bestGoldScore },
     matrix,
     skipped,
     evidenceChunkIds,

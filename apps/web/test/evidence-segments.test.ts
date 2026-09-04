@@ -90,6 +90,23 @@ describe("buildSegments", () => {
     ]);
   });
 
+  // The evidence highlight is per chunk, not per gold span: a segment is evidence when any chunk
+  // the diagnosis named overlaps it. Every other case in this file passes an empty evidence set, so
+  // this is the one that pins what a non-empty one does -- including that the flag follows the
+  // chunk's own extent across the gold boundary rather than stopping at the mark.
+  it("marks segments overlapping an evidence chunk, independently of the gold span", () => {
+    // Chunk 1 [20,40) is evidence; the gold span [25,35) sits inside it, so the mark splits the
+    // chunk into three segments and all three are evidence. Chunks 0 and 2 are not.
+    const segments = buildSegments(TEXT, 0, 60, 25, 35, CHUNKS, new Set(["c1"]));
+    expect(segments).toEqual([
+      { start: 0, text: TEXT.slice(0, 20), isGold: false, isEvidence: false, boundaryChunkIdxs: null },
+      { start: 20, text: TEXT.slice(20, 25), isGold: false, isEvidence: true, boundaryChunkIdxs: [1] },
+      { start: 25, text: TEXT.slice(25, 35), isGold: true, isEvidence: true, boundaryChunkIdxs: null },
+      { start: 35, text: TEXT.slice(35, 40), isGold: false, isEvidence: true, boundaryChunkIdxs: null },
+      { start: 40, text: TEXT.slice(40, 60), isGold: false, isEvidence: false, boundaryChunkIdxs: [2] },
+    ]);
+  });
+
   it("returns no segments for an empty text without crashing", () => {
     const segments = buildSegments("", 0, 0, 5, 10, CHUNKS, NO_EVIDENCE);
     expect(segments).toEqual([]);

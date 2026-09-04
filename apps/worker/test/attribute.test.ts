@@ -241,7 +241,9 @@ describe("attributeHandler verdicts", () => {
 
     expect(row.verdict).toBe("chunking");
     expect(cf.rule).toBe("gold-straddles-chunks");
-    expect(cf.signals).toEqual({ goldInSingleChunk: false, bestGoldRank: 6, k: 1 });
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: false, bestGoldRank: 6, k: 1, bestGoldScore: expect.any(Number),
+    });
 
     // The heading set keeps the span whole in one short section, which outranks the decoys there.
     expect(cellsOf(cf, "chunker")).toEqual([
@@ -269,7 +271,9 @@ describe("attributeHandler verdicts", () => {
 
     expect((await attributionFor(result.id)).verdict).toBe("embedding");
     expect(cf.rule).toBe("gold-intact-not-ranked");
-    expect(cf.signals).toEqual({ goldInSingleChunk: true, bestGoldRank: 6, k: 1 });
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: true, bestGoldRank: 6, k: 1, bestGoldScore: expect.any(Number),
+    });
     // Every counterfactual misses -- rank 6 is out of reach at k=4, the heading set chunks this
     // one-line document identically, and the alternate embedder has no synonym to exploit here.
     expect(cf.matrix.every((c) => !c.hit)).toBe(true);
@@ -284,7 +288,9 @@ describe("attributeHandler verdicts", () => {
 
     expect(row.verdict).toBe("embedding");
     expect(cf.rule).toBe("embedder-counterfactual-hits");
-    expect(cf.signals).toEqual({ goldInSingleChunk: true, bestGoldRank: 6, k: 1 });
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: true, bestGoldRank: 6, k: 1, bestGoldScore: expect.any(Number),
+    });
     expect(cellsOf(cf, "embedder")).toEqual([
       { kind: "embedder", label: ALT_MODEL, hit: true, rank: 1 },
     ]);
@@ -299,7 +305,9 @@ describe("attributeHandler verdicts", () => {
 
     expect(row.verdict).toBe("retrieval");
     expect(cf.rule).toBe("topk-recovers");
-    expect(cf.signals).toEqual({ goldInSingleChunk: true, bestGoldRank: 2, k: 1 });
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: true, bestGoldRank: 2, k: 1, bestGoldScore: expect.any(Number),
+    });
     expect(cellsOf(cf, "topk")).toEqual([
       { kind: "topk", label: "k=2", hit: true, rank: 2 },
       { kind: "topk", label: "k=4", hit: true, rank: 2 },
@@ -315,7 +323,10 @@ describe("attributeHandler verdicts", () => {
     expect(row.verdict).toBe("unanswerable");
     expect(cf.rule).toBe("nothing-hits");
     // No chunk overlaps gold at all, which is the one case that must not be read as a straddle.
-    expect(cf.signals).toEqual({ goldInSingleChunk: false, bestGoldRank: null, k: 1 });
+    // No gold-overlapping row exists, so there is no score to report either.
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: false, bestGoldRank: null, k: 1, bestGoldScore: null,
+    });
     expect(cf.matrix.every((c) => !c.hit && c.rank === null)).toBe(true);
     // No gold-overlapping chunk exists, so the evidence is only what the run retrieved.
     expect(row.evidenceChunkIds).toHaveLength(1);
@@ -331,7 +342,30 @@ describe("attributeHandler verdicts", () => {
     const row = await attributionFor(result.id);
     const cf = stored(row);
     expect(row.verdict).toBe("chunking");
-    expect(cf.signals).toEqual({ goldInSingleChunk: false, bestGoldRank: 6, k: 8 });
+    expect(cf.signals).toEqual({
+      goldInSingleChunk: false, bestGoldRank: 6, k: 8, bestGoldScore: expect.any(Number),
+    });
+  });
+
+  // The semantic-gap evidence (spec 7.1): a rank alone does not say whether the gold chunk lost by
+  // a hair or was nowhere near, so the score of the row bestGoldRank points at is stored alongside
+  // it. Pinned against the run's OWN retrieved scores rather than a hard-coded float: at topK 8 the
+  // rank-6 row is inside the cutoff, so the same row appears on the result and must carry the same
+  // score -- which is also what proves the stored score belongs to the gold row and not to the top
+  // of the ordering.
+  it("stores the score of the row bestGoldRank points at", async () => {
+    const result = await freshResult(q.straddle, { topK: 8 });
+    await diagnose(result.id);
+    const { signals } = stored(await attributionFor(result.id));
+
+    const retrieved = result.retrieved ?? [];
+    expect(retrieved).toHaveLength(8);
+    const goldRow = retrieved[signals.bestGoldRank! - 1];
+    expect(goldRow.rank).toBe(6);
+    expect(signals.bestGoldScore).toBeCloseTo(goldRow.score, 10);
+    // A real similarity, and NOT the winning score: the gap between them is the point.
+    expect(signals.bestGoldScore).toBeGreaterThan(0);
+    expect(signals.bestGoldScore).toBeLessThan(retrieved[0].score);
   });
 });
 

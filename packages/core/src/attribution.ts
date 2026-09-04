@@ -170,13 +170,18 @@ export function mockExplanation(verdict: AttributionVerdict, signals: Attributio
       // recovering gold that this set's chunks -- intact or not covering it at all -- never surfaced.
       // Claiming a "boundary split" on the 2b door would be false when the gold span isn't split at
       // all; it just isn't in a retrievable chunk under this particular chunker's cuts.
+      //
+      // The 2b wording therefore states only what holds behind BOTH of its doors -- gold sitting
+      // intact in a chunk that was not retrieved, and gold covered by no chunk in this set at all.
+      // "No retrieved chunk covered the gold answer" is true either way; anything about how the
+      // gold span itself is shaped would be a guess about which door was taken.
       return !goldInSingleChunk && bestGoldRank !== null
         ? `The gold answer span is split across a chunk boundary rather than living intact in one ` +
             `chunk, so no single retrieved chunk could ever contain the whole answer; this is a ` +
             `chunking failure.`
-        : `This chunk set did not put the gold answer in a retrievable chunk, but a different ` +
-            `chunker's set retrieved it; the failure is in how the corpus was divided into chunks, ` +
-            `not in the embedder or the cutoff.`;
+        : `Under this chunk set's cuts, no retrieved chunk covered the gold answer, but a ` +
+            `different chunker's set retrieved it; the failure is in how the corpus was divided ` +
+            `into chunks, not in the embedder or the cutoff.`;
     case "embedding":
       return bestGoldRank === null
         ? `The gold span sits intact in a single chunk, but that chunk was never ranked highly ` +

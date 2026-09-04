@@ -196,10 +196,20 @@ describe("mockExplanation", () => {
     expect(text).toContain("3");
   });
 
-  it("chunking template on the 2b door (chunker counterfactual hit, no straddle) does not claim a boundary split", () => {
-    const text = mockExplanation("chunking", { goldInSingleChunk: false, bestGoldRank: null, k: 3 });
-    expect(text.toLowerCase()).not.toContain("boundary");
-    expect(text.toLowerCase()).not.toContain("split");
+  // Both doors onto the 2b template: gold covered by no chunk in this set at all, and gold sitting
+  // intact in a chunk that was not retrieved. The template may only assert what holds behind both,
+  // which is that nothing retrieved covered the gold answer -- never a boundary split, which is
+  // false on either door.
+  it("chunking template on the 2b door states only what holds behind both of its doors", () => {
+    for (const signals of [
+      { goldInSingleChunk: false, bestGoldRank: null, k: 3 },
+      { goldInSingleChunk: true, bestGoldRank: 9, k: 3 },
+    ]) {
+      const text = mockExplanation("chunking", signals);
+      expect(text.toLowerCase()).toContain("no retrieved chunk covered the gold answer");
+      expect(text.toLowerCase()).not.toContain("boundary");
+      expect(text.toLowerCase()).not.toContain("split");
+    }
   });
 
   it("chunking template on a genuine straddle (2a) mentions the boundary split", () => {

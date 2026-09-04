@@ -6,13 +6,20 @@ import type { AttributionSignals, AttributionVerdict, Counterfactual } from "@ra
  * is a deliberate, pinned-by-contract redeclaration (see task-2-report.md's "Contracts for Task 3") --
  * keep it in sync with the worker type if that shape ever changes.
  */
+/**
+ * Mirrors `StoredSignals` from the worker: core's AttributionSignals plus the score of the best
+ * gold-overlapping chunk, which decideVerdict does not consume and the evidence view renders.
+ * Null exactly when bestGoldRank is null.
+ */
+export type StoredSignals = AttributionSignals & { bestGoldScore: number | null };
+
 export type StoredCounterfactuals = {
   matrix: Counterfactual[];
   /** Human-readable `<what>: <why>` lines for counterfactuals that could not be run. */
   skipped: string[];
   /** Stable rule id from decideVerdict (packages/core/src/attribution.ts), e.g. "gold-straddles-chunks". */
   rule: string;
-  signals: AttributionSignals;
+  signals: StoredSignals;
 };
 
 /** The `attributions` row shape as read back from Postgres, with `counterfactuals` cast to its real shape. */
