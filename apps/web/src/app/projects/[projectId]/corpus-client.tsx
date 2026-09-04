@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { SectionHead } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { EmptyState } from "@/components/empty-state";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cls, state } from "@/lib/ui";
 
 type Document = {
   id: string;
@@ -11,6 +17,8 @@ type Document = {
   createdAt: string;
 };
 
+type ModelCoverage = { model: string; embedded: number; total: number };
+
 type ChunkSet = {
   id: string;
   chunker: string;
@@ -20,19 +28,11 @@ type ChunkSet = {
   embedError: string | null;
   createdAt: string;
   chunkCount: number;
+  modelCoverage: ModelCoverage[];
 };
 
 const CHUNKERS = ["fixed", "heading", "sentence-window"] as const;
 const EMBED_MODELS = ["mock-embedding", "text-embedding-3-small", "gemini-embedding-001"];
-
-const STATUS_COLOR: Record<string, string> = {
-  ready: "#1a7f37",
-  parsing: "#9a6700",
-  failed: "#cf222e",
-  duplicate: "#57606a",
-};
-
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
 
 export function CorpusClient({ projectId }: { projectId: string }) {
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -95,72 +95,136 @@ export function CorpusClient({ projectId }: { projectId: string }) {
 
   return (
     <div>
-      <section>
-        <h2>Documents</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Filename</th>
-              <th style={cellStyle}>Status</th>
-              <th style={cellStyle}>Error</th>
+      <section className={cls.section}>
+        <SectionHead
+          title="Documents"
+          hint={documents.length > 0 ? `${documents.length} uploaded` : undefined}
+        />
+        <DataTable
+          isEmpty={documents.length === 0}
+          empty={
+            <EmptyState
+              title="No documents yet"
+              hint="Upload a text or markdown file to start. Questions are generated from these documents, and every gold span points back into one of them."
+            />
+          }
+          head={
+            <>
+              <th>Filename</th>
+              <th>Status</th>
+              <th>Detail</th>
+            </>
+          }
+        >
+          {documents.map((d) => (
+            <tr key={d.id}>
+              <td>{d.filename}</td>
+              <td>
+                <StatusBadge status={d.status} />
+              </td>
+              <td className={cls.muted}>{d.error ?? ""}</td>
             </tr>
-          </thead>
-          <tbody>
-            {documents.map((d) => (
-              <tr key={d.id}>
-                <td style={cellStyle}>{d.filename}</td>
-                <td style={{ ...cellStyle, color: STATUS_COLOR[d.status] }}>{d.status}</td>
-                <td style={cellStyle}>{d.error ?? ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <form onSubmit={handleUpload}>
-          <input type="file" name="file" required />
-          <button type="submit">Upload</button>
+          ))}
+        </DataTable>
+
+        <form onSubmit={handleUpload} className={cls.form} style={{ marginTop: 12 }}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Add a document</span>
+            <input className={cls.input} type="file" name="file" required />
+          </label>
+          <button type="submit" className={cls.btn}>
+            Upload
+          </button>
         </form>
-        {uploadError ? <p role="alert">{uploadError}</p> : null}
+        {uploadError ? <Notice>{uploadError}</Notice> : null}
       </section>
 
-      <section>
-        <h2>Chunk sets</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Chunker</th>
-              <th style={cellStyle}>Params hash</th>
-              <th style={cellStyle}>Chunks</th>
-              <th style={cellStyle}>Embed models</th>
-              <th style={cellStyle}>Embed error</th>
+      <section className={cls.section}>
+        <SectionHead
+          title="Chunk sets"
+          hint="One chunker plus its parameters. Re-running a chunker re-chunks every document currently in the project."
+        />
+        <DataTable
+          isEmpty={chunkSets.length === 0}
+          empty={
+            <EmptyState
+              title="No chunk sets yet"
+              hint="Pick a chunker and an embedding model below. A config can only retrieve against a set whose chunks are fully embedded."
+            />
+          }
+          head={
+            <>
+              <th>Chunker</th>
+              <th>Params</th>
+              <th className={cls.num}>Chunks</th>
+              <th>Embeddings</th>
+              <th>Detail</th>
+            </>
+          }
+        >
+          {chunkSets.map((s) => (
+            <tr key={s.id}>
+              <td>{s.chunker}</td>
+              <td className={cls.mono}>{s.paramsHash.slice(0, 8)}</td>
+              <td className={cls.num}>{s.chunkCount}</td>
+              <td>
+                {s.modelCoverage.length === 0 ? (
+                  <span className={cls.muted}>none requested</span>
+                ) : (
+                  <span className={cls.stack} style={{ gap: 2 }}>
+                    {s.modelCoverage.map((m) => {
+                      const complete = m.total > 0 && m.embedded === m.total;
+                      return (
+                        <span key={m.model} style={{ whiteSpace: "nowrap" }}>
+                          {m.model}{" "}
+                          <span
+                            className={cls.mono}
+                            style={{ color: complete ? state.success : state.warning }}
+                          >
+                            {m.embedded}/{m.total}
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </span>
+                )}
+              </td>
+              <td style={{ color: s.embedError ? state.danger : undefined }}>{s.embedError ?? ""}</td>
             </tr>
-          </thead>
-          <tbody>
-            {chunkSets.map((s) => (
-              <tr key={s.id}>
-                <td style={cellStyle}>{s.chunker}</td>
-                <td style={cellStyle}>{s.paramsHash.slice(0, 8)}</td>
-                <td style={cellStyle}>{s.chunkCount}</td>
-                <td style={cellStyle}>{s.embedModels.join(", ")}</td>
-                <td style={{ ...cellStyle, color: s.embedError ? "#cf222e" : undefined }}>{s.embedError ?? ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <form onSubmit={handleCreateChunkSet}>
-          <select value={chunker} onChange={(e) => setChunker(e.target.value as (typeof CHUNKERS)[number])}>
-            {CHUNKERS.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          <select value={embedModel} onChange={(e) => setEmbedModel(e.target.value)}>
-            <option value="">(no embedding)</option>
-            {EMBED_MODELS.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
-          </select>
-          <button type="submit">Create chunk set</button>
+          ))}
+        </DataTable>
+
+        <form onSubmit={handleCreateChunkSet} className={cls.form} style={{ marginTop: 12 }}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Chunker</span>
+            <select
+              className={cls.input}
+              value={chunker}
+              onChange={(e) => setChunker(e.target.value as (typeof CHUNKERS)[number])}
+            >
+              {CHUNKERS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Embedding model</span>
+            <select className={cls.input} value={embedModel} onChange={(e) => setEmbedModel(e.target.value)}>
+              <option value="">(no embedding)</option>
+              {EMBED_MODELS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" className={cls.btn}>
+            Create chunk set
+          </button>
         </form>
-        {chunkSetError ? <p role="alert">{chunkSetError}</p> : null}
+        {chunkSetError ? <Notice>{chunkSetError}</Notice> : null}
       </section>
     </div>
   );

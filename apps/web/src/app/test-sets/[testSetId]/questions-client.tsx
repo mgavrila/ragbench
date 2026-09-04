@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { PageHeader } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { EmptyState } from "@/components/empty-state";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cls } from "@/lib/ui";
 
 type TestSet = {
   id: string;
@@ -23,14 +29,6 @@ type Question = {
   goldStart: number;
   goldEnd: number;
 };
-
-const STATUS_COLOR: Record<string, string> = {
-  ready: "#1a7f37",
-  generating: "#9a6700",
-  failed: "#cf222e",
-};
-
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
 
 export function QuestionsClient({ testSetId, initialTestSet }: { testSetId: string; initialTestSet: TestSet }) {
   const [testSet, setTestSet] = useState<TestSet>(initialTestSet);
@@ -73,49 +71,85 @@ export function QuestionsClient({ testSetId, initialTestSet }: { testSetId: stri
 
   return (
     <div>
-      <p><Link href={`/projects/${testSet.projectId}`}>&larr; back to project</Link></p>
-      <h1>{testSet.name}</h1>
-      <p>
-        Model: {testSet.generatorModel} &middot;{" "}
-        <span style={{ color: STATUS_COLOR[testSet.status] }}>{testSet.status}</span> &middot;{" "}
-        {/* Actual count of what's usable, not a ratio against the target -- a ready set that
-            landed under target, or a failed set that still generated some questions, are both
-            shown plainly rather than framed as a shortfall. */}
-        {questions.length} questions &middot; target {testSet.questionsTarget}
+      <p style={{ marginBottom: 12 }}>
+        <Link href={`/projects/${testSet.projectId}`}>&larr; Back to project</Link>
       </p>
+      <PageHeader
+        eyebrow="Test set"
+        title={testSet.name}
+        meta={
+          <span className={cls.row} style={{ gap: 8 }}>
+            <StatusBadge status={testSet.status} />
+            <span>·</span>
+            <span>{testSet.generatorModel}</span>
+            <span>·</span>
+            {/* Actual count of what's usable, not a ratio against the target -- a ready set that
+                landed under target, or a failed set that still generated some questions, are both
+                shown plainly rather than framed as a shortfall. */}
+            <span>
+              {questions.length} question{questions.length === 1 ? "" : "s"} (target{" "}
+              {testSet.questionsTarget})
+            </span>
+          </span>
+        }
+      />
+
       {/* A failed set's error is an alert; a ready set's is an advisory (e.g. "kept 0 of 30: ...")
           describing a shortfall, not a failure -- it must not read as one. */}
       {testSet.error ? (
-        testSet.status === "failed"
-          ? <p role="alert" style={{ color: "#cf222e" }}>{testSet.error}</p>
-          : <p>{testSet.error}</p>
+        testSet.status === "failed" ? (
+          <Notice>{testSet.error}</Notice>
+        ) : (
+          <Notice tone="neutral" role="status">
+            {testSet.error}
+          </Notice>
+        )
       ) : null}
-      {deleteError ? <p role="alert">{deleteError}</p> : null}
+      {deleteError ? <Notice>{deleteError}</Notice> : null}
 
-      <table style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={cellStyle}>Question</th>
-            <th style={cellStyle}>Gold answer</th>
-            <th style={cellStyle}>Source</th>
-            <th style={cellStyle}>Span</th>
-            <th style={cellStyle} />
+      <DataTable
+        isEmpty={questions.length === 0}
+        empty={
+          <EmptyState
+            title={testSet.status === "generating" ? "Generating questions…" : "No questions in this set"}
+            hint={
+              testSet.status === "generating"
+                ? "The generator is reading the corpus. This page refreshes itself while it works."
+                : "Every question here was kept only if its gold answer was found verbatim in its source document."
+            }
+          />
+        }
+        head={
+          <>
+            <th>Question</th>
+            <th>Gold answer</th>
+            <th>Source</th>
+            <th className={cls.num}>Span</th>
+            <th />
+          </>
+        }
+      >
+        {questions.map((q) => (
+          <tr key={q.id}>
+            <td>{q.question}</td>
+            <td>{q.goldAnswer}</td>
+            <td className={cls.muted}>{q.filename}</td>
+            <td className={cls.num}>
+              {q.goldStart}–{q.goldEnd}
+            </td>
+            <td>
+              <button
+                type="button"
+                className={cls.btnSm}
+                onClick={() => handleDelete(q.id)}
+                aria-label={`Delete question: ${q.question}`}
+              >
+                Delete
+              </button>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {questions.map((q) => (
-            <tr key={q.id}>
-              <td style={cellStyle}>{q.question}</td>
-              <td style={cellStyle}>{q.goldAnswer}</td>
-              <td style={cellStyle}>{q.filename}</td>
-              <td style={cellStyle}>{q.goldStart}–{q.goldEnd}</td>
-              <td style={cellStyle}>
-                <button type="button" onClick={() => handleDelete(q.id)}>Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        ))}
+      </DataTable>
     </div>
   );
 }

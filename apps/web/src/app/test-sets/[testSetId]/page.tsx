@@ -4,6 +4,7 @@ import { projects, testSets } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
 import { parseUuid } from "@/lib/params";
+import { AppShell } from "@/components/app-shell";
 import { QuestionsClient } from "./questions-client";
 
 export default async function TestSetPage({ params }: { params: Promise<{ testSetId: string }> }) {
@@ -36,18 +37,20 @@ export default async function TestSetPage({ params }: { params: Promise<{ testSe
   if (!row || row.organizationId !== session.user.organizationId) notFound();
 
   return (
-    <QuestionsClient
-      testSetId={testSetId}
-      initialTestSet={{
-        id: row.id,
-        projectId: row.projectId,
-        name: row.name,
-        generatorModel: row.generatorModel,
-        status: row.status,
-        error: row.error,
-        questionsTarget: row.questionsTarget,
-        createdAt: row.createdAt.toISOString(),
-      }}
-    />
+    <AppShell>
+      <QuestionsClient
+        testSetId={testSetId}
+        initialTestSet={{
+          id: row.id,
+          projectId: row.projectId,
+          name: row.name,
+          generatorModel: row.generatorModel,
+          status: row.status,
+          error: row.error,
+          questionsTarget: row.questionsTarget,
+          createdAt: row.createdAt.toISOString(),
+        }}
+      />
+    </AppShell>
   );
 }

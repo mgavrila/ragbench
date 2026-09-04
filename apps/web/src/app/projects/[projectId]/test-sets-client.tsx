@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { SectionHead } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { EmptyState } from "@/components/empty-state";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cls, state } from "@/lib/ui";
 
 type TestSet = {
   id: string;
@@ -24,16 +30,6 @@ type Estimate = {
 };
 
 const GENERATOR_MODELS = ["mock-llm", "claude-haiku-4-5", "claude-opus-5", "gemini-2.5-flash"];
-
-// "generating" reuses the same amber as corpus-client's in-flight "parsing" status, so the two
-// sections read consistently even though they track different tables.
-const STATUS_COLOR: Record<string, string> = {
-  ready: "#1a7f37",
-  generating: "#9a6700",
-  failed: "#cf222e",
-};
-
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
 
 export function TestSetsClient({ projectId }: { projectId: string }) {
   const [testSets, setTestSets] = useState<TestSet[]>([]);
@@ -92,68 +88,106 @@ export function TestSetsClient({ projectId }: { projectId: string }) {
   }
 
   return (
-    <section>
-      <h2>Test sets</h2>
-      <table style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={cellStyle}>Name</th>
-            <th style={cellStyle}>Model</th>
-            <th style={cellStyle}>Status</th>
+    <section className={cls.section}>
+      <SectionHead
+        title="Test sets"
+        hint="Questions generated from the corpus, each with a gold answer span in its source document."
+      />
+      <DataTable
+        isEmpty={testSets.length === 0}
+        empty={
+          <EmptyState
+            title="No test sets yet"
+            hint="Generate one below. Every run scores its configs against the questions in a single test set."
+          />
+        }
+        head={
+          <>
+            <th>Name</th>
+            <th>Model</th>
+            <th>Status</th>
             {/* Not "Error": a ready set can carry an advisory here (why a run kept nothing), and
                 labelling that an error contradicts the status sitting next to it. */}
-            <th style={cellStyle}>Detail</th>
-            <th style={cellStyle}>Questions</th>
-            <th style={cellStyle}>Created</th>
+            <th>Detail</th>
+            <th className={cls.num}>Questions</th>
+            <th>Created</th>
+          </>
+        }
+      >
+        {testSets.map((s) => (
+          <tr key={s.id}>
+            <td>
+              <Link href={`/test-sets/${s.id}`}>{s.name}</Link>
+            </td>
+            <td className={cls.muted}>{s.generatorModel}</td>
+            <td>
+              <StatusBadge status={s.status} />
+            </td>
+            <td className={cls.muted}>{s.error ?? ""}</td>
+            {/* Actual count, not a "N/target" ratio -- a set can finish ready under target and
+                that is a legitimate result, not a shortfall to flag. */}
+            <td className={cls.num}>{s.questionCount}</td>
+            <td className={cls.muted}>{new Date(s.createdAt).toLocaleString()}</td>
           </tr>
-        </thead>
-        <tbody>
-          {testSets.map((s) => (
-            <tr key={s.id}>
-              <td style={cellStyle}><Link href={`/test-sets/${s.id}`}>{s.name}</Link></td>
-              <td style={cellStyle}>{s.generatorModel}</td>
-              <td style={{ ...cellStyle, color: STATUS_COLOR[s.status] }}>{s.status}</td>
-              <td style={cellStyle}>{s.error ?? ""}</td>
-              {/* Actual count, not a "N/target" ratio -- a set can finish ready under target and
-                  that is a legitimate result, not a shortfall to flag. */}
-              <td style={cellStyle}>{s.questionCount} questions</td>
-              <td style={cellStyle}>{new Date(s.createdAt).toLocaleString()}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+        ))}
+      </DataTable>
 
-      <form onSubmit={handleCreate}>
-        <input
-          name="name"
-          placeholder="Test set name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
-        <select value={model} onChange={(e) => setModel(e.target.value)}>
-          {GENERATOR_MODELS.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
-        <input
-          type="number"
-          min={1}
-          max={200}
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          required
-        />
-        <button type="submit">Generate test set</button>
+      <form onSubmit={handleCreate} className={cls.form} style={{ marginTop: 12 }}>
+        <label className={cls.field}>
+          <span className={cls.fieldLabel}>Name</span>
+          <input
+            className={cls.input}
+            name="name"
+            placeholder="Round 1"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </label>
+        <label className={cls.field}>
+          <span className={cls.fieldLabel}>Generator model</span>
+          <select className={cls.input} value={model} onChange={(e) => setModel(e.target.value)}>
+            {GENERATOR_MODELS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className={cls.field}>
+          <span className={cls.fieldLabel}>Questions</span>
+          <input
+            className={cls.input}
+            type="number"
+            min={1}
+            max={200}
+            style={{ width: "6rem" }}
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            required
+          />
+        </label>
+        <button type="submit" className={cls.btn}>
+          Generate test set
+        </button>
       </form>
 
       {estimate ? (
-        <p>
-          Estimated cost: ~${estimate.estimatedUsd.toFixed(4)} ({estimate.documents} ready document{estimate.documents === 1 ? "" : "s"})
-          {estimate.warning ? <><br /><span style={{ color: STATUS_COLOR.generating }}>{estimate.warning}</span></> : null}
+        <p className={cls.muted} style={{ marginTop: 8, fontSize: 13 }}>
+          Estimated cost{" "}
+          <span className={cls.mono} style={{ color: "var(--rb-text)" }}>
+            ~${estimate.estimatedUsd.toFixed(4)}
+          </span>{" "}
+          over {estimate.documents} ready document{estimate.documents === 1 ? "" : "s"}
+          {estimate.warning ? (
+            <>
+              <br />
+              <span style={{ color: state.warning }}>{estimate.warning}</span>
+            </>
+          ) : null}
         </p>
       ) : null}
-      {createError ? <p role="alert">{createError}</p> : null}
+      {createError ? <Notice>{createError}</Notice> : null}
     </section>
   );
 }

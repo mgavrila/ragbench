@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { SectionHead } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { EmptyState } from "@/components/empty-state";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cls, state } from "@/lib/ui";
+
+type ModelCoverage = { model: string; embedded: number; total: number };
 
 type ChunkSetOption = {
   id: string;
@@ -11,6 +19,8 @@ type ChunkSetOption = {
   embedModels: string[];
   /** The subset of those whose vectors actually exist and can therefore be retrieved against. */
   embeddedModels: string[];
+  /** Per-model `embedded`/`total` chunk counts, which is how a not-yet-usable model says why. */
+  modelCoverage: ModelCoverage[];
   chunkCount: number;
 };
 
@@ -46,20 +56,9 @@ type Run = {
   createdAt: string;
 };
 
-// Same universe as test-sets-client's GENERATOR_MODELS; duplicated per house style (each client
-// keeps its own copy -- plan 6 owns consolidating these).
+// Same universe as test-sets-client's GENERATOR_MODELS.
 const LLM_MODELS = ["mock-llm", "claude-haiku-4-5", "claude-opus-5", "gemini-2.5-flash"];
 const MODES = ["full", "retrieval-only"] as const;
-
-const RUN_STATUS_COLOR: Record<string, string> = {
-  pending: "#57606a",
-  running: "#9a6700",
-  done: "#1a7f37",
-  failed: "#cf222e",
-  cancelled: "#57606a",
-};
-
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
 
 export function EvalClient({ projectId }: { projectId: string }) {
   const [chunkSets, setChunkSets] = useState<ChunkSetOption[]>([]);
@@ -172,173 +171,254 @@ export function EvalClient({ projectId }: { projectId: string }) {
   return (
     <div>
       {refreshError ? (
-        <p role="status" style={{ color: RUN_STATUS_COLOR.running }}>
+        <Notice tone="warning" role="status">
           {refreshError} — showing the last data that loaded.
-        </p>
+        </Notice>
       ) : null}
-      <section>
-        <h2>RAG configs</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Name</th>
-              <th style={cellStyle}>Chunk set</th>
-              <th style={cellStyle}>Embedding model</th>
-              <th style={cellStyle}>Top K</th>
-              <th style={cellStyle}>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {configs.map((c) => (
-              <tr key={c.id}>
-                <td style={cellStyle}>{c.name}</td>
-                <td style={cellStyle}>{c.chunker} ({c.chunkSetId.slice(0, 8)})</td>
-                <td style={cellStyle}>{c.embeddingModel}</td>
-                <td style={cellStyle}>{c.topK}</td>
-                <td style={cellStyle}>{new Date(c.createdAt).toLocaleString()}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
 
-        <form onSubmit={handleCreateConfig}>
-          <input
-            name="name"
-            placeholder="Config name"
-            value={configName}
-            onChange={(e) => setConfigName(e.target.value)}
-            required
-          />
-          <select value={chunkSetId} onChange={(e) => handleChunkSetChange(e.target.value)} required>
-            <option value="" disabled>Chunk set...</option>
-            {chunkSets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.chunker} ({s.paramsHash.slice(0, 8)}, {s.chunkCount} chunks)
-              </option>
-            ))}
-          </select>
-          {/* Options are the union of every model REQUESTED for the set and every model that
-              actually HAS vectors: a model whose embed job is still queued (or failed) stays
-              visible and accounted for -- but disabled until its vectors exist, because a config
-              built on it retrieves nothing -- and a model embedded before requests were recorded
-              (pre-0003 rows) is still offered rather than hidden. */}
-          <select value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} required>
-            <option value="" disabled>Embedding model...</option>
-            {[...new Set([...(selectedChunkSet?.embedModels ?? []), ...(selectedChunkSet?.embeddedModels ?? [])])].map((m) => {
-              const embedded = selectedChunkSet?.embeddedModels.includes(m) ?? false;
-              return (
-                <option key={m} value={m} disabled={!embedded}>
-                  {embedded ? m : `${m} (not embedded yet)`}
+      <section className={cls.section}>
+        <SectionHead
+          title="RAG configs"
+          hint="One chunk set plus an embedding model and a top-k cutoff. A run compares several of these side by side."
+        />
+        <DataTable
+          isEmpty={configs.length === 0}
+          empty={
+            <EmptyState
+              title="No configs yet"
+              hint="Build one below from a chunk set whose embeddings have finished. Two configs differing in a single knob is what makes a run's grid readable."
+            />
+          }
+          head={
+            <>
+              <th>Name</th>
+              <th>Chunk set</th>
+              <th>Embedding model</th>
+              <th className={cls.num}>Top K</th>
+              <th>Created</th>
+            </>
+          }
+        >
+          {configs.map((c) => (
+            <tr key={c.id}>
+              <td>{c.name}</td>
+              <td>
+                {c.chunker} <span className={cls.mono}>{c.chunkSetId.slice(0, 8)}</span>
+              </td>
+              <td className={cls.muted}>{c.embeddingModel}</td>
+              <td className={cls.num}>{c.topK}</td>
+              <td className={cls.muted}>{new Date(c.createdAt).toLocaleString()}</td>
+            </tr>
+          ))}
+        </DataTable>
+
+        <form onSubmit={handleCreateConfig} className={cls.form} style={{ marginTop: 12 }}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Name</span>
+            <input
+              className={cls.input}
+              name="name"
+              placeholder="fixed / top 5"
+              value={configName}
+              onChange={(e) => setConfigName(e.target.value)}
+              required
+            />
+          </label>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Chunk set</span>
+            <select
+              className={cls.input}
+              value={chunkSetId}
+              onChange={(e) => handleChunkSetChange(e.target.value)}
+              required
+            >
+              <option value="" disabled>Chunk set...</option>
+              {chunkSets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.chunker} ({s.paramsHash.slice(0, 8)}, {s.chunkCount} chunks)
                 </option>
-              );
-            })}
-          </select>
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={topK}
-            onChange={(e) => setTopK(e.target.value)}
-            required
-          />
-          <button type="submit" disabled={!chunkSetId || !embeddingModel}>Create config</button>
+              ))}
+            </select>
+          </label>
+          {/* Options are every model REQUESTED for the set (a model with vectors but no request on
+              record is not offered -- nothing removes from that array, so in practice requests are
+              a superset of what has vectors). A model whose embed job is still queued, running or
+              failed partway stays visible and accounted for, but disabled: a config built on it
+              retrieves nothing. Its label carries the coverage counts so the option says WHY. */}
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Embedding model</span>
+            <select
+              className={cls.input}
+              value={embeddingModel}
+              onChange={(e) => setEmbeddingModel(e.target.value)}
+              required
+            >
+              <option value="" disabled>Embedding model...</option>
+              {[...new Set([...(selectedChunkSet?.embedModels ?? []), ...(selectedChunkSet?.embeddedModels ?? [])])].map((m) => {
+                const embedded = selectedChunkSet?.embeddedModels.includes(m) ?? false;
+                const coverage = selectedChunkSet?.modelCoverage.find((c) => c.model === m);
+                return (
+                  <option key={m} value={m} disabled={!embedded}>
+                    {embedded
+                      ? m
+                      : coverage
+                        ? `${m} (${coverage.embedded}/${coverage.total} chunks embedded)`
+                        : `${m} (not embedded yet)`}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Top K</span>
+            <input
+              className={cls.input}
+              type="number"
+              min={1}
+              max={50}
+              style={{ width: "5rem" }}
+              value={topK}
+              onChange={(e) => setTopK(e.target.value)}
+              required
+            />
+          </label>
+          <button type="submit" className={cls.btn} disabled={!chunkSetId || !embeddingModel}>
+            Create config
+          </button>
         </form>
         {selectedChunkSet && selectedChunkSet.embeddedModels.length === 0 ? (
-          <p role="alert">
+          <Notice tone="warning">
             {selectedChunkSet.embedModels.length === 0
               ? "This chunk set has no embeddings yet -- request one from the corpus section above."
               : "This chunk set's embeddings are still being built -- no model can be used for retrieval yet."}
-          </p>
+          </Notice>
         ) : null}
-        {configError ? <p role="alert">{configError}</p> : null}
+        {configError ? <Notice>{configError}</Notice> : null}
       </section>
 
-      <section>
-        <h2>Evaluation runs</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Test set</th>
-              <th style={cellStyle}>Mode</th>
-              <th style={cellStyle}>Status</th>
-              <th style={cellStyle}>Progress</th>
-              <th style={cellStyle}>Error</th>
-              <th style={cellStyle}>Created</th>
-              <th style={cellStyle}></th>
+      <section className={cls.section}>
+        <SectionHead title="Evaluation runs" hint="Every config in a run is scored against the same questions." />
+        <DataTable
+          isEmpty={runs.length === 0}
+          empty={
+            <EmptyState
+              title="No runs yet"
+              hint="Pick a test set and one to six configs below. The run's grid is where a miss becomes a diagnosis."
+            />
+          }
+          head={
+            <>
+              <th>Test set</th>
+              <th>Mode</th>
+              <th>Status</th>
+              <th className={cls.num}>Progress</th>
+              <th>Detail</th>
+              <th>Created</th>
+              <th />
+            </>
+          }
+        >
+          {runs.map((r) => (
+            <tr key={r.id}>
+              <td>{r.testSetName}</td>
+              <td className={cls.muted}>{r.mode}</td>
+              <td>
+                <StatusBadge status={r.status} />
+              </td>
+              <td className={cls.num}>{r.totalJobs > 0 ? `${r.completedJobs}/${r.totalJobs}` : "—"}</td>
+              <td className={cls.muted}>{r.error ?? ""}</td>
+              <td className={cls.muted}>{new Date(r.createdAt).toLocaleString()}</td>
+              <td>
+                <Link href={`/runs/${r.id}`}>View</Link>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {runs.map((r) => (
-              <tr key={r.id}>
-                <td style={cellStyle}>{r.testSetName}</td>
-                <td style={cellStyle}>{r.mode}</td>
-                <td style={{ ...cellStyle, color: RUN_STATUS_COLOR[r.status] }}>{r.status}</td>
-                <td style={cellStyle}>{r.totalJobs > 0 ? `${r.completedJobs}/${r.totalJobs}` : "--"}</td>
-                <td style={cellStyle}>{r.error ?? ""}</td>
-                <td style={cellStyle}>{new Date(r.createdAt).toLocaleString()}</td>
-                <td style={cellStyle}><Link href={`/runs/${r.id}`}>View</Link></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
 
-        <form onSubmit={handleCreateRun}>
-          <select value={testSetId} onChange={(e) => setTestSetId(e.target.value)} required>
-            <option value="" disabled>Test set...</option>
-            {testSets.map((t) => (
-              <option key={t.id} value={t.id}>{t.name} ({t.questionCount} questions, {t.status})</option>
-            ))}
-          </select>
+        <form onSubmit={handleCreateRun} className={cls.form} style={{ marginTop: 12, alignItems: "flex-start" }}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Test set</span>
+            <select
+              className={cls.input}
+              value={testSetId}
+              onChange={(e) => setTestSetId(e.target.value)}
+              required
+            >
+              <option value="" disabled>Test set...</option>
+              {testSets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.questionCount} questions, {t.status})
+                </option>
+              ))}
+            </select>
+          </label>
 
-          <fieldset>
+          <fieldset className={cls.fieldset}>
             <legend>Configs (1-6)</legend>
-            {configs.map((c) => (
-              <label key={c.id} style={{ display: "block" }}>
-                <input
-                  type="checkbox"
-                  checked={selectedConfigIds.has(c.id)}
-                  onChange={() => toggleConfig(c.id)}
-                />
-                {" "}{c.name} ({c.chunker}, top {c.topK})
-                {staleConfigIds?.includes(c.id) ? (
-                  <span style={{ color: RUN_STATUS_COLOR.failed }}> -- stale, rebuild its chunk set</span>
-                ) : null}
-              </label>
-            ))}
+            {configs.length === 0 ? (
+              <span className={cls.muted}>Create a config first.</span>
+            ) : (
+              configs.map((c) => (
+                <label key={c.id} className={cls.choice}>
+                  <input
+                    type="checkbox"
+                    checked={selectedConfigIds.has(c.id)}
+                    onChange={() => toggleConfig(c.id)}
+                  />
+                  <span>
+                    {c.name}{" "}
+                    <span className={cls.muted}>
+                      ({c.chunker}, top {c.topK})
+                    </span>
+                    {staleConfigIds?.includes(c.id) ? (
+                      <span style={{ color: state.danger }}> — stale, rebuild its chunk set</span>
+                    ) : null}
+                  </span>
+                </label>
+              ))
+            )}
           </fieldset>
 
-          <fieldset>
+          <fieldset className={cls.fieldset}>
             <legend>Mode</legend>
             {MODES.map((m) => (
-              <label key={m} style={{ display: "inline-block", marginRight: "1em" }}>
+              <label key={m} className={cls.choiceInline}>
                 <input type="radio" name="mode" value={m} checked={mode === m} onChange={() => setMode(m)} />
-                {" "}{m}
+                <span>{m}</span>
               </label>
             ))}
           </fieldset>
 
-          <label>
-            Judge model{" "}
-            <select value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Judge model</span>
+            <select className={cls.input} value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)}>
               {LLM_MODELS.map((m) => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>
+                  {m}
+                </option>
               ))}
             </select>
           </label>
-          <label>
-            Answer model{" "}
-            <select value={answerModel} onChange={(e) => setAnswerModel(e.target.value)}>
+          <label className={cls.field}>
+            <span className={cls.fieldLabel}>Answer model</span>
+            <select className={cls.input} value={answerModel} onChange={(e) => setAnswerModel(e.target.value)}>
               {LLM_MODELS.map((m) => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>
+                  {m}
+                </option>
               ))}
             </select>
           </label>
 
-          <button type="submit" disabled={!testSetId || selectedConfigIds.size === 0 || selectedConfigIds.size > 6}>
+          <button
+            type="submit"
+            className={cls.btnPrimary}
+            disabled={!testSetId || selectedConfigIds.size === 0 || selectedConfigIds.size > 6}
+          >
             Start run
           </button>
         </form>
-        {runError ? <p role="alert">{runError}</p> : null}
+        {runError ? <Notice>{runError}</Notice> : null}
       </section>
     </div>
   );
