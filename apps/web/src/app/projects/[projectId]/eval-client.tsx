@@ -7,7 +7,10 @@ type ChunkSetOption = {
   id: string;
   chunker: string;
   paramsHash: string;
+  /** Every model ever REQUESTED for the set. */
   embedModels: string[];
+  /** The subset of those whose vectors actually exist and can therefore be retrieved against. */
+  embeddedModels: string[];
   chunkCount: number;
 };
 
@@ -77,18 +80,27 @@ export function EvalClient({ projectId }: { projectId: string }) {
   const [answerModel, setAnswerModel] = useState<string>(LLM_MODELS[0]);
   const [runError, setRunError] = useState<string | null>(null);
   const [staleConfigIds, setStaleConfigIds] = useState<string[] | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   async function refresh() {
-    const [chunkSetsRes, configsRes, testSetsRes, runsRes] = await Promise.all([
-      fetch(`/api/projects/${projectId}/chunk-sets`),
-      fetch(`/api/projects/${projectId}/configs`),
-      fetch(`/api/projects/${projectId}/test-sets`),
-      fetch(`/api/projects/${projectId}/runs`),
-    ]);
-    if (chunkSetsRes.ok) setChunkSets((await chunkSetsRes.json()).chunkSets);
-    if (configsRes.ok) setConfigs((await configsRes.json()).configs);
-    if (testSetsRes.ok) setTestSets((await testSetsRes.json()).testSets);
-    if (runsRes.ok) setRuns((await runsRes.json()).runs);
+    // The poll must never reject: an unhandled rejection out of the interval callback is invisible
+    // on the page and leaves the tables frozen on whatever last loaded. Same shape as the run
+    // page's poll, lighter weight -- one notice, cleared the moment a refresh succeeds again.
+    try {
+      const [chunkSetsRes, configsRes, testSetsRes, runsRes] = await Promise.all([
+        fetch(`/api/projects/${projectId}/chunk-sets`),
+        fetch(`/api/projects/${projectId}/configs`),
+        fetch(`/api/projects/${projectId}/test-sets`),
+        fetch(`/api/projects/${projectId}/runs`),
+      ]);
+      if (chunkSetsRes.ok) setChunkSets((await chunkSetsRes.json()).chunkSets);
+      if (configsRes.ok) setConfigs((await configsRes.json()).configs);
+      if (testSetsRes.ok) setTestSets((await testSetsRes.json()).testSets);
+      if (runsRes.ok) setRuns((await runsRes.json()).runs);
+      setRefreshError(null);
+    } catch (err) {
+      setRefreshError(err instanceof Error ? err.message : "could not refresh");
+    }
   }
 
   useEffect(() => {
@@ -103,7 +115,8 @@ export function EvalClient({ projectId }: { projectId: string }) {
   function handleChunkSetChange(id: string) {
     setChunkSetId(id);
     const set = chunkSets.find((s) => s.id === id);
-    setEmbeddingModel(set?.embedModels[0] ?? "");
+    // Defaults to a model that can actually retrieve, never merely to one that was requested.
+    setEmbeddingModel(set?.embeddedModels[0] ?? "");
   }
 
   async function handleCreateConfig(e: FormEvent<HTMLFormElement>) {
@@ -158,6 +171,11 @@ export function EvalClient({ projectId }: { projectId: string }) {
 
   return (
     <div>
+      {refreshError ? (
+        <p role="status" style={{ color: RUN_STATUS_COLOR.running }}>
+          {refreshError} — showing the last data that loaded.
+        </p>
+      ) : null}
       <section>
         <h2>RAG configs</h2>
         <table style={{ borderCollapse: "collapse" }}>
@@ -199,11 +217,20 @@ export function EvalClient({ projectId }: { projectId: string }) {
               </option>
             ))}
           </select>
+          {/* Options come from every model REQUESTED for the set, so a model whose embed job is
+              still queued (or failed) stays visible and accounted for -- but it is disabled until
+              its vectors exist, because a config built on it retrieves nothing and every question
+              in every run using it fails. */}
           <select value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} required>
             <option value="" disabled>Embedding model...</option>
-            {(selectedChunkSet?.embedModels ?? []).map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))}
+            {(selectedChunkSet?.embedModels ?? []).map((m) => {
+              const embedded = selectedChunkSet?.embeddedModels.includes(m) ?? false;
+              return (
+                <option key={m} value={m} disabled={!embedded}>
+                  {embedded ? m : `${m} (not embedded yet)`}
+                </option>
+              );
+            })}
           </select>
           <input
             type="number"
@@ -215,8 +242,12 @@ export function EvalClient({ projectId }: { projectId: string }) {
           />
           <button type="submit" disabled={!chunkSetId || !embeddingModel}>Create config</button>
         </form>
-        {selectedChunkSet && selectedChunkSet.embedModels.length === 0 ? (
-          <p role="alert">This chunk set has no embeddings yet -- request one from the corpus section above.</p>
+        {selectedChunkSet && selectedChunkSet.embeddedModels.length === 0 ? (
+          <p role="alert">
+            {selectedChunkSet.embedModels.length === 0
+              ? "This chunk set has no embeddings yet -- request one from the corpus section above."
+              : "This chunk set's embeddings are still being built -- no model can be used for retrieval yet."}
+          </p>
         ) : null}
         {configError ? <p role="alert">{configError}</p> : null}
       </section>

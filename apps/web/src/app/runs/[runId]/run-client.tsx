@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 type RunDetail = {
   id: string;
@@ -132,23 +132,41 @@ export function RunClient({ runId }: { runId: string }) {
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [drawerError, setDrawerError] = useState<string | null>(null);
 
+  // openCell runs outside this effect, so it cannot use the `cancelled` flag below to decide
+  // whether its awaited fetch still has a component to update. This is that flag for the drawer.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setInterval> | null = null;
 
     async function fetchOnce() {
-      const res = await fetch(`/api/runs/${runId}`);
-      if (cancelled) return;
-      if (res.ok) {
-        const body: RunResponse = await res.json();
-        setData(body);
-        if (timer && TERMINAL_STATUSES.has(body.run.status)) {
-          clearInterval(timer);
-          timer = null;
+      try {
+        const res = await fetch(`/api/runs/${runId}`);
+        if (cancelled) return;
+        if (res.ok) {
+          const body: RunResponse = await res.json();
+          setData(body);
+          // Cleared on every success: a single failed poll (the dev server restarting, a blip)
+          // would otherwise leave the error latched forever while fresh data kept arriving.
+          setLoadError(null);
+          if (timer && TERMINAL_STATUSES.has(body.run.status)) {
+            clearInterval(timer);
+            timer = null;
+          }
+        } else {
+          const body = await res.json().catch(() => ({}));
+          setLoadError(body.error ?? "failed to load run");
         }
-      } else {
-        const body = await res.json().catch(() => ({}));
-        setLoadError(body.error ?? "failed to load run");
+      } catch (err) {
+        // fetch rejects on a network fault rather than resolving with !res.ok. Unhandled, that
+        // rejection kills the poll silently and the page freezes on stale data with no explanation.
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : "failed to load run");
       }
     }
 
@@ -171,18 +189,30 @@ export function RunClient({ runId }: { runId: string }) {
     if (cellCache[key]) return;
     setDrawerLoading(true);
     setDrawerError(null);
-    const res = await fetch(`/api/runs/${runId}/results/${configId}/${questionId}`);
-    setDrawerLoading(false);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      setDrawerError(body.error ?? "failed to load result");
-      return;
+    try {
+      const res = await fetch(`/api/runs/${runId}/results/${configId}/${questionId}`);
+      if (!mounted.current) return;
+      setDrawerLoading(false);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setDrawerError(body.error ?? "failed to load result");
+        return;
+      }
+      const body: CellDetail = await res.json();
+      if (!mounted.current) return;
+      setCellCache((prev) => ({ ...prev, [key]: body }));
+    } catch (err) {
+      if (!mounted.current) return;
+      setDrawerLoading(false);
+      setDrawerError(err instanceof Error ? err.message : "failed to load result");
     }
-    const body: CellDetail = await res.json();
-    setCellCache((prev) => ({ ...prev, [key]: body }));
   }
 
-  if (loadError) return <p role="alert">{loadError}</p>;
+  // Only a page with nothing to show is replaced by its error. Once a grid has been rendered, a
+  // later failed poll is a banner over data that is merely stale -- swapping the whole page for one
+  // line of text on a transient blip throws away the results the user is reading, and the drawer
+  // with them.
+  if (loadError && !data) return <p role="alert">{loadError}</p>;
   if (!data) return <p>Loading…</p>;
 
   const { run, configs, grid } = data;
@@ -190,6 +220,11 @@ export function RunClient({ runId }: { runId: string }) {
 
   return (
     <div>
+      {loadError ? (
+        <p role="alert" style={{ color: RED }}>
+          {loadError} — showing the last data that loaded.
+        </p>
+      ) : null}
       <h1>Run {run.id.slice(0, 8)}</h1>
       <p>
         Mode: {run.mode} · Judge: {run.judgeModel ?? "--"}
