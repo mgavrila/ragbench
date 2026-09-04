@@ -332,20 +332,52 @@ describe("evaluateQuestionHandler (retrieval-only)", () => {
     expect(after.status).toBe("done");
   });
 
-  it("no-ops on a cancelled run", async () => {
+  // Both terminal statuses stop the run from spending: `cancelled` is the user's doing, `failed` is
+  // start-run having given up on the run (an unembedded config, a bad topK). Either way the jobs
+  // already fanned out are still sitting in the queue, and each one would otherwise pay for an
+  // embed and up to two LLM calls to write a result nobody asked for.
+  for (const status of ["cancelled", "failed"] as const) {
+    it(`no-ops on a ${status} run`, async () => {
+      const [cfg] = await ctx.db.insert(ragConfigs).values({
+        projectId, name: `${status}-cfg`, chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+      }).returning();
+      const run = await makeRun("retrieval-only");
+      await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+      sentJobs.length = 0;
+      await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+      await ctx.db.update(evalRuns).set({ status }).where(eq(evalRuns.id, run.id));
+
+      for (const job of evalJobs()) await evaluateQuestionHandler(job, { db: ctx.db, boss: recordingBoss });
+
+      const rows = await ctx.db.select().from(questionResults).where(eq(questionResults.runId, run.id));
+      expect(rows).toEqual([]);
+    });
+  }
+
+  // Documents the deliberate asymmetry with the run statuses above: a question soft-deleted after
+  // fan-out is still evaluated. start-run snapshotted the active questions and froze totalJobs
+  // against them, so skipping the job here would strand the run one result short of complete and
+  // punch a hole in the grid. (See the comment in evaluateQuestionHandler.)
+  it("still evaluates a question soft-deleted after fan-out", async () => {
     const [cfg] = await ctx.db.insert(ragConfigs).values({
-      projectId, name: "cancelled-cfg", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+      projectId, name: "deleted-q", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
     }).returning();
     const run = await makeRun("retrieval-only");
     await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
     sentJobs.length = 0;
     await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
-    await ctx.db.update(evalRuns).set({ status: "cancelled" }).where(eq(evalRuns.id, run.id));
 
-    for (const job of evalJobs()) await evaluateQuestionHandler(job, { db: ctx.db, boss: recordingBoss });
-
-    const rows = await ctx.db.select().from(questionResults).where(eq(questionResults.runId, run.id));
-    expect(rows).toEqual([]);
+    const job = evalJobs().find((j) => j.questionId === qHit)!;
+    await ctx.db.update(testQuestions).set({ status: "deleted" }).where(eq(testQuestions.id, qHit));
+    try {
+      await evaluateQuestionHandler(job, { db: ctx.db, boss: recordingBoss });
+      const row = await resultFor(job.runId, job.configId, job.questionId);
+      expect(row.status).toBe("done");
+      expect(row.hit).toBe(true);
+    } finally {
+      // Shared fixture: every later test fans out over these three questions.
+      await ctx.db.update(testQuestions).set({ status: "active" }).where(eq(testQuestions.id, qHit));
+    }
   });
 });
 

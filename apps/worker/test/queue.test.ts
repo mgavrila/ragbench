@@ -14,6 +14,8 @@ describe("worker queue", () => {
     await boss.deleteAllJobs("echo");
     await boss.deleteAllJobs("noop");
     await boss.deleteAllJobs("fanout");
+    await boss.deleteAllJobs("evaluate-question");
+    await boss.deleteAllJobs("serial-probe");
     await stop();
   });
 
@@ -52,6 +54,60 @@ describe("worker queue", () => {
     }
     await stop();
     expect([...seen].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  // Each of these handlers parks until the expected number of jobs is in flight at once, so the
+  // assertion cannot pass by accident: with a serial worker the barrier is never reached and
+  // `peak` stays at 1. The wait is bounded so a genuinely serial worker fails the assertion rather
+  // than hanging the suite.
+  async function peakConcurrency(queue: string, jobCount: number, expectPeak: number): Promise<number> {
+    let inFlight = 0;
+    let peak = 0;
+    let done = 0;
+    const { boss, stop } = await startWorker({
+      databaseUrl: URL,
+      handlers: {
+        [queue]: async () => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          const deadline = Date.now() + 5000;
+          while (inFlight < expectPeak && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          peak = Math.max(peak, inFlight);
+          inFlight--;
+          done++;
+        },
+      },
+    });
+    for (let i = 0; i < jobCount; i++) await enqueue(boss, queue, { i }, `k${i}`);
+    const deadline = Date.now() + 30000;
+    while (done < jobCount && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await stop();
+    return peak;
+  }
+
+  // Spec section 6: the worker caps LLM concurrency (default 4, configurable). Evaluating a
+  // question is one embed plus up to two LLM calls, so a serial worker turns a 90-job run into 90
+  // sequential round trips to a provider that would happily serve several at once.
+  it("runs evaluate-question jobs concurrently up to RAGBENCH_EVAL_CONCURRENCY", async () => {
+    const previous = process.env.RAGBENCH_EVAL_CONCURRENCY;
+    process.env.RAGBENCH_EVAL_CONCURRENCY = "3";
+    try {
+      expect(await peakConcurrency("evaluate-question", 3, 3)).toBe(3);
+    } finally {
+      if (previous === undefined) delete process.env.RAGBENCH_EVAL_CONCURRENCY;
+      else process.env.RAGBENCH_EVAL_CONCURRENCY = previous;
+    }
+  });
+
+  // Only evaluate-question is uncapped. The rest stay one-at-a-time: chunk and embed rebuild a
+  // whole set (two at once on the same set would fight over the same rows), and nothing else has a
+  // provider round trip worth parallelising.
+  it("keeps every other queue serial", async () => {
+    expect(await peakConcurrency("serial-probe", 2, 2)).toBe(1);
   });
 
   it("deduplicates on singletonKey", async () => {
