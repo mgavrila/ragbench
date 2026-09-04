@@ -6,6 +6,7 @@ export * from "./testset";
 export * from "./testset-prompts";
 export * from "./metrics";
 export * from "./judge";
+export * from "./attribution";
 export * from "./providers/mock";
 export * from "./providers/anthropic";
 export * from "./providers/openai";
