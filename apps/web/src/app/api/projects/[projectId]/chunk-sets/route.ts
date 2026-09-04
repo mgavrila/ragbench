@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { and, eq, sql } from "drizzle-orm";
-import { chunks, chunkSets } from "@ragbench/db";
+import { chunkEmbeddings, chunks, chunkSets } from "@ragbench/db";
 import { hashParams, lookupEmbeddingModel } from "@ragbench/core";
 import { z } from "zod";
 import { getDb } from "@/lib/db";
@@ -42,7 +42,8 @@ export async function listChunkSets(projectId: string, session: Session | null) 
   const project = await requireProject(projectId, session);
   if (!project) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const rows = await getDb()
+  const db = getDb();
+  const rows = await db
     .select({
       id: chunkSets.id,
       projectId: chunkSets.projectId,
@@ -59,7 +60,32 @@ export async function listChunkSets(projectId: string, session: Session | null) 
     .where(eq(chunkSets.projectId, projectId))
     .groupBy(chunkSets.id);
 
-  return NextResponse.json({ chunkSets: rows });
+  // `embedModels` is every model ever REQUESTED for the set; a model is only usable for retrieval
+  // once its vectors exist. The two diverge for as long as an embed job is queued, running, or has
+  // failed outright, and a config built against a merely-requested model produces a run whose every
+  // question fails at retrieval. Reported as its own list (rather than filtering embedModels down)
+  // so the picker can still show a requested-but-not-yet-embedded model, greyed out, instead of
+  // silently dropping the model the user just asked for.
+  //
+  // Kept out of the aggregate query above: joining chunk_embeddings there would multiply the rows
+  // count(chunks.id) sees, turning chunkCount into chunks x models.
+  const embedded = await db
+    .selectDistinct({ chunkSetId: chunks.chunkSetId, model: chunkEmbeddings.model })
+    .from(chunkEmbeddings)
+    .innerJoin(chunks, eq(chunks.id, chunkEmbeddings.chunkId))
+    .innerJoin(chunkSets, eq(chunkSets.id, chunks.chunkSetId))
+    .where(eq(chunkSets.projectId, projectId));
+
+  const embeddedBySet = new Map<string, string[]>();
+  for (const { chunkSetId, model } of embedded) {
+    const list = embeddedBySet.get(chunkSetId);
+    if (list) list.push(model);
+    else embeddedBySet.set(chunkSetId, [model]);
+  }
+
+  return NextResponse.json({
+    chunkSets: rows.map((r) => ({ ...r, embeddedModels: embeddedBySet.get(r.id) ?? [] })),
+  });
 }
 
 export async function createChunkSet(
@@ -95,16 +121,29 @@ export async function createChunkSet(
   }
 
   // The set remembers every embedding model it has ever been asked for, appended here (before the
-  // chunk job is enqueued) rather than carried in the job payload. Writing it to the row first --
-  // and having chunkHandler read it back post-commit -- is what makes a concurrent re-POST for a
-  // second model safe: it can land its append after this job already started without being
-  // dropped, because chunkHandler re-reads the row instead of trusting a payload snapshot.
-  if (embedModel && !chunkSet.embedModels.includes(embedModel)) {
-    const [updated] = await db.update(chunkSets)
-      .set({ embedModels: [...chunkSet.embedModels, embedModel] })
-      .where(eq(chunkSets.id, chunkSet.id))
-      .returning();
-    chunkSet = updated;
+  // chunk job is enqueued) rather than carried in the job payload. Two independent races are in
+  // play and each has its own defence:
+  //
+  //  1. Lost update between two concurrent POSTs for DIFFERENT models. Read-modify-write in the
+  //     request (read embedModels, append in JS, write the whole array back) loses whichever append
+  //     commits second. So the append is one statement: postgres does the concatenation, and the
+  //     `@>` guard in the WHERE makes it a no-op when the model is already there, which keeps a
+  //     re-POST for the same model from duplicating the entry.
+  //  2. A rebuild already in flight when the append lands. chunkHandler re-reads embedModels off
+  //     the row after its own commit rather than trusting a payload snapshot, so a model appended
+  //     after the chunk job started is still picked up and embedded.
+  if (embedModel) {
+    const modelJson = JSON.stringify([embedModel]);
+    await db.execute(sql`
+      update ${chunkSets}
+      set embed_models = ${chunkSets.embedModels} || ${modelJson}::jsonb
+      where ${chunkSets.id} = ${chunkSet.id}
+        and not (${chunkSets.embedModels} @> ${modelJson}::jsonb)
+    `);
+    // Re-read rather than RETURNING: the response should show the row as it stands after every
+    // concurrent append, not just this request's contribution to it.
+    const [refreshed] = await db.select().from(chunkSets).where(eq(chunkSets.id, chunkSet.id));
+    chunkSet = refreshed;
   }
 
   // Only the chunk job is sent, even when embedding was requested: chunkHandler enqueues embed

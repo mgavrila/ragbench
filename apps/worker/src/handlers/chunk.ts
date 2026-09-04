@@ -3,10 +3,6 @@ import { chunkSets, chunks, computeFingerprint, documents } from "@ragbench/db";
 import { CHUNKERS } from "@ragbench/core";
 import { enqueue, type JobHandler } from "../queue";
 
-// Moved to @ragbench/db (packages/db/src/fingerprint.ts) so the web runs route can compute it
-// too, without depending on the worker package. Re-exported here for compatibility.
-export { computeFingerprint } from "@ragbench/db";
-
 // Postgres caps a single statement at 65,535 bind parameters. Each chunk row binds 6 (chunkSetId,
 // documentId, idx, text, startOffset, endOffset), so one statement tops out around 10,922 rows;
 // 5,000 keeps a comfortable margin below that.

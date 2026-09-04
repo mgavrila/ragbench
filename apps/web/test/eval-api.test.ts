@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { eq } from "drizzle-orm";
 import {
-  chunkSets, chunks, chunkEmbeddings, documents, evalRuns, questionResults, ragConfigs, testQuestions, testSets,
+  chunkSets, chunks, chunkEmbeddings, documents, evalRunConfigs, evalRuns, questionResults, ragConfigs,
+  testQuestions, testSets,
 } from "@ragbench/db";
 import { createConfig, listConfigs } from "@/app/api/projects/[projectId]/configs/route";
 import { createRun, listRuns } from "@/app/api/projects/[projectId]/runs/route";
@@ -214,6 +215,31 @@ describe("runs api", () => {
     expect(run.status).toBe("pending");
     expect(run.judgeModel).toBe("mock-llm");
     expect(sent).toEqual([{ queue: "start-run", data: { runId: run.id, organizationId: orgId }, key: run.id }]);
+  });
+
+  // The dedupe is not merely cosmetic: eval_run_configs is unique on (run_id, config_id), so a
+  // duplicate id reaching the insert would abort it -- and, before the inserts were wrapped in one
+  // transaction, would have left an orphaned run row with no configs behind.
+  it("collapses duplicate configIds to a single eval_run_configs row", async () => {
+    sent.length = 0;
+    const res = await createRun(
+      projectId,
+      jsonReq({ testSetId, configIds: [configId, configId, secondConfigId, configId], mode: "retrieval-only" }),
+      session() as never, fakeSend,
+    );
+    expect(res.status).toBe(201);
+    const { run } = await res.json();
+
+    const rows = await getDb().select().from(evalRunConfigs).where(eq(evalRunConfigs.runId, run.id));
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.configId))).toEqual(new Set([configId, secondConfigId]));
+
+    // start-run derives totalJobs from these rows, so the fan-out is 2 configs x 1 active question,
+    // not the 4 the request literally listed.
+    const detail = await getRun(run.id, session() as never);
+    const body = await detail.json();
+    expect(body.configs).toHaveLength(2);
+    expect(body.configs[0].aggregates.questions).toBe(1);
   });
 
   it("rejects an unknown judge/answer model, a bad mode, and out-of-range configIds", async () => {

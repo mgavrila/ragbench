@@ -30,11 +30,18 @@ describe("makeUsageReporter", () => {
     const report = makeUsageReporter(ctx.db, orgId);
     await report({ purpose: "embed", provider: "openai", model: "text-embedding-3-small", inputTokens: 1_000_000, outputTokens: 0 });
     await report({ purpose: "embed", provider: "mock", model: "not-registered", inputTokens: 5, outputTokens: 0 });
+    // "constructor" is inherited from Object.prototype, so a bare LLM_MODELS[model] check resolves
+    // it to a function and sends it to the pricing math, which throws on the unknown model. The
+    // reporter must be unthrowable for ANY model string, so this logs at zero cost like any other
+    // unregistered name.
+    await report({ purpose: "embed", provider: "mock", model: "constructor", inputTokens: 5, outputTokens: 0 });
     const rows = await ctx.db.select().from(usageLog).where(eq(usageLog.organizationId, orgId));
     const small = rows.find((r) => r.model === "text-embedding-3-small")!;
     const unknown = rows.find((r) => r.model === "not-registered")!;
+    const inherited = rows.find((r) => r.model === "constructor")!;
     expect(small.costUsd).toBeCloseTo(0.02);
     expect(unknown.costUsd).toBe(0);
+    expect(inherited.costUsd).toBe(0);
   });
 
   it("resolves without throwing when the insert fails, metering being advisory-only", async () => {

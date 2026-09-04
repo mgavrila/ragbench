@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { chunkEmbeddings, chunks, documents } from "@ragbench/db";
 import { createChunkSet, listChunkSets } from "@/app/api/projects/[projectId]/chunk-sets/route";
 import { registerUser } from "@/lib/signup";
 import { createProject } from "@/app/api/projects/route";
+import { getDb } from "@/lib/db";
 
 let orgId: string; let projectId: string;
 const session = () => ({ user: { id: "u", organizationId: orgId } });
@@ -65,6 +67,25 @@ describe("chunk-sets api", () => {
     expect(sent[0].data).toEqual({ chunkSetId: setId, organizationId: orgId });
   });
 
+  // The append is a single `embed_models || '["m"]'::jsonb` statement guarded by `NOT (... @> ...)`,
+  // so that two concurrent POSTs for different models cannot lose each other's write. The guard is
+  // what keeps that statement idempotent -- without it, re-requesting a model the set already has
+  // would concatenate a second copy and chunkHandler would chain a duplicate embed job per rebuild.
+  it("appends the same model only once no matter how often it is requested", async () => {
+    const body = { chunker: "fixed", params: { maxTokens: 123 }, embedModel: "mock-embedding" };
+    const first = await createChunkSet(projectId, req(body), session() as never, fakeSend);
+    expect(first.status).toBe(201);
+    const created = (await first.json()).chunkSet;
+
+    for (let i = 0; i < 3; i++) {
+      const again = await createChunkSet(projectId, req(body), session() as never, fakeSend);
+      expect(again.status).toBe(200);
+      const { chunkSet } = await again.json();
+      expect(chunkSet.id).toBe(created.id);
+      expect(chunkSet.embedModels).toEqual(["mock-embedding"]);
+    }
+  });
+
   it("rejects unknown chunkers and embedding models, including inherited Object keys", async () => {
     expect((await createChunkSet(projectId, req({ chunker: "nope" }), session() as never, fakeSend)).status).toBe(400);
     expect((await createChunkSet(projectId, req({ chunker: "fixed", embedModel: "nope" }), session() as never, fakeSend)).status).toBe(400);
@@ -121,5 +142,33 @@ describe("chunk-sets api", () => {
     expect(chunkSets.map((s: { id: string }) => s.id)).toContain(setId);
     for (const s of chunkSets) expect(s).toHaveProperty("chunkCount");
     expect((await listChunkSets(projectId, { user: { id: "u", organizationId: "00000000-0000-0000-0000-000000000000" } } as never)).status).toBe(404);
+  });
+
+  // `setId` has had two models requested (mock-embedding, text-embedding-3-small) but nothing has
+  // run the embed handler in this suite, so only the vectors seeded here exist. The two lists must
+  // come back different: the picker greys out a requested model until it can actually retrieve.
+  it("reports embedded models separately from merely-requested ones", async () => {
+    const [doc] = await getDb().insert(documents).values({
+      projectId, filename: "e.md", mime: "text/markdown", contentHash: `he${Date.now()}`,
+      status: "ready", text: "hello world",
+    }).returning();
+    const [chunk] = await getDb().insert(chunks).values({
+      chunkSetId: setId, documentId: doc.id, idx: 0, text: "hello world", startOffset: 0, endOffset: 11,
+    }).returning();
+    await getDb().insert(chunkEmbeddings).values({
+      chunkId: chunk.id, model: "mock-embedding", dimension: 3, embedding: [0.1, 0.2, 0.3],
+    });
+
+    const list = await listChunkSets(projectId, session() as never);
+    const { chunkSets } = await list.json();
+    const row = chunkSets.find((s: { id: string }) => s.id === setId);
+    expect(row.embedModels).toEqual(["mock-embedding", "text-embedding-3-small"]);
+    expect(row.embeddedModels).toEqual(["mock-embedding"]);
+    // The join must not inflate the aggregate: one chunk, one embedding, still one chunk.
+    expect(row.chunkCount).toBe(1);
+
+    // A set with no embeddings at all reports an empty list rather than being omitted.
+    const bare = chunkSets.find((s: { id: string; chunker: string }) => s.chunker === "heading");
+    expect(bare.embeddedModels).toEqual([]);
   });
 });

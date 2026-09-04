@@ -122,10 +122,15 @@ export async function createRun(
     );
   }
 
-  const [run] = await db.insert(evalRuns)
-    .values({ projectId, testSetId, mode, judgeModel, answerModel: answerModel ?? null })
-    .returning();
-  await db.insert(evalRunConfigs).values(configIds.map((configId) => ({ runId: run.id, configId })));
+  // One transaction: a run row whose config rows failed to insert is a run start-run would fan out
+  // to zero configs, reaching `done` with an empty grid and no indication anything went wrong.
+  const run = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(evalRuns)
+      .values({ projectId, testSetId, mode, judgeModel, answerModel: answerModel ?? null })
+      .returning();
+    await tx.insert(evalRunConfigs).values(configIds.map((configId) => ({ runId: created.id, configId })));
+    return created;
+  });
 
   try {
     await send("start-run", { runId: run.id, organizationId: session.user.organizationId }, run.id);
