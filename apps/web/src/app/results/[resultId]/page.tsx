@@ -4,6 +4,7 @@ import { attributions, chunks, documents, evalRuns, projects, questionResults, r
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
 import { parseUuid } from "@/lib/params";
+import { AppShell } from "@/components/app-shell";
 import { EvidenceClient } from "./evidence-client";
 import type { StoredCounterfactuals } from "@/lib/attribution";
 
@@ -60,20 +61,22 @@ export default async function ResultPage({ params }: { params: Promise<{ resultI
     : null;
 
   return (
-    <EvidenceClient
-      resultId={resultId}
-      runId={result.runId}
-      question={{
-        question: question.question,
-        goldAnswer: question.goldAnswer,
-        goldStart: question.goldStart,
-        goldEnd: question.goldEnd,
-      }}
-      doc={{ filename: document?.filename ?? null, text: document?.text ?? null }}
-      chunks={chunkRows}
-      initialAttribution={attribution}
-      initialResultStatus={result.status}
-      hit={result.hit}
-    />
+    <AppShell>
+      <EvidenceClient
+        resultId={resultId}
+        runId={result.runId}
+        question={{
+          question: question.question,
+          goldAnswer: question.goldAnswer,
+          goldStart: question.goldStart,
+          goldEnd: question.goldEnd,
+        }}
+        doc={{ filename: document?.filename ?? null, text: document?.text ?? null }}
+        chunks={chunkRows}
+        initialAttribution={attribution}
+        initialResultStatus={result.status}
+        hit={result.hit}
+      />
+    </AppShell>
   );
 }

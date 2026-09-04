@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import type { Attribution } from "@/lib/attribution";
+import type { Attribution, StoredSignals } from "@/lib/attribution";
+import { SectionHead } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cls, cx, state, VERDICT_TONE } from "@/lib/ui";
 
 type ChunkOffset = { id: string; idx: number; startOffset: number; endOffset: number };
 type QuestionInfo = { question: string; goldAnswer: string; goldStart: number; goldEnd: number };
@@ -19,26 +24,6 @@ type Props = {
   hit: boolean | null;
 };
 
-// Same palette as run-client's RUN_STATUS_COLOR/cellColor (green/amber/red/grey) -- per-file
-// constants by house convention (plan 6 owns any future consolidation), not a shared module.
-const GREEN = "#1a7f37";
-const AMBER = "#9a6700";
-const RED = "#cf222e";
-const GREY = "#57606a";
-
-// Mapping chosen for "is this fixable without touching the corpus": retrieval (raise k) is the
-// closest thing to a quick fix, hence green; chunking and embedding both require rebuilding
-// artifacts (amber/red per severity of what has to change); unanswerable is a likely test-set issue,
-// not a pipeline failure, hence neutral grey.
-const VERDICT_COLOR: Record<Attribution["verdict"], string> = {
-  retrieval: GREEN,
-  chunking: AMBER,
-  embedding: RED,
-  unanswerable: GREY,
-};
-
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
-
 // ±2000 chars around the gold span, per brief -- long documents render a window instead of the
 // whole text, with controls to grow it (and a shortcut to the full document).
 const WINDOW_PAD = 2000;
@@ -47,6 +32,11 @@ const POLL_INTERVAL_MS = 2000;
 // completes is documented as "no row, ever" (silent failure, task-2-report.md); re-clicking is the
 // only recovery path, so the UI must hand control back to the user rather than waiting indefinitely.
 const POLL_TIMEOUT_MS = 30000;
+
+/** The gold highlight, also used for the legend swatch so the two cannot drift apart. */
+const GOLD_FILL = "#fff3b8";
+/** The tint over chunks the diagnosis actually leaned on. Amber at 12% -- readable text over it. */
+const EVIDENCE_TINT = "rgba(154,103,0,0.12)";
 
 export type Segment = {
   start: number;
@@ -105,28 +95,54 @@ export function buildSegments(
 }
 
 function MatrixTable({ matrix }: { matrix: Attribution["counterfactuals"]["matrix"] }) {
-  if (matrix.length === 0) return <p>(no counterfactuals were run)</p>;
   return (
-    <table style={{ borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          <th style={cellStyle}>Kind</th>
-          <th style={cellStyle}>Label</th>
-          <th style={cellStyle}>Hit</th>
-          <th style={cellStyle}>Rank</th>
+    <DataTable
+      isEmpty={matrix.length === 0}
+      empty={<p className={cls.muted}>(no counterfactuals were run)</p>}
+      head={
+        <>
+          <th>Kind</th>
+          <th>Variant</th>
+          <th>Hit</th>
+          <th className={cls.num}>Rank</th>
+        </>
+      }
+    >
+      {matrix.map((c, i) => (
+        <tr key={`${c.kind}-${c.label}-${i}`}>
+          <td className={cls.muted}>{c.kind}</td>
+          <td>{c.label}</td>
+          <td style={{ color: c.hit ? state.success : state.danger, fontWeight: 600 }}>
+            {c.hit ? "✓ hit" : "✗ miss"}
+          </td>
+          <td className={cls.num}>{c.rank ?? "—"}</td>
         </tr>
-      </thead>
-      <tbody>
-        {matrix.map((c, i) => (
-          <tr key={`${c.kind}-${c.label}-${i}`}>
-            <td style={cellStyle}>{c.kind}</td>
-            <td style={cellStyle}>{c.label}</td>
-            <td style={{ ...cellStyle, color: c.hit ? GREEN : RED }}>{c.hit ? "✓" : "✗"}</td>
-            <td style={cellStyle}>{c.rank ?? "—"}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+      ))}
+    </DataTable>
+  );
+}
+
+/**
+ * The numbers the verdict was actually decided from. `bestGoldScore` is rendered only when the
+ * stored row carries it: attributions written before the field existed have it undefined, and
+ * printing 0.000 for "we do not know" would read as "the gold chunk scored nothing".
+ */
+function SignalsBlock({ signals }: { signals: StoredSignals }) {
+  return (
+    <dl className={cls.kv}>
+      <dt>Gold span within one chunk</dt>
+      <dd>{signals.goldInSingleChunk ? "yes" : "no"}</dd>
+      <dt>Best gold chunk rank</dt>
+      <dd>{signals.bestGoldRank ?? "— (no chunk overlaps gold)"}</dd>
+      <dt>Top-k cutoff</dt>
+      <dd>{signals.k}</dd>
+      {typeof signals.bestGoldScore === "number" ? (
+        <>
+          <dt>Best gold similarity</dt>
+          <dd>{signals.bestGoldScore.toFixed(3)}</dd>
+        </>
+      ) : null}
+    </dl>
   );
 }
 
@@ -217,40 +233,44 @@ export function EvidenceClient({
 
   return (
     <div>
-      <p><Link href={`/runs/${runId}`}>← Back to run</Link></p>
-      <h1>{question.question}</h1>
-      <p>Gold answer: {question.goldAnswer}</p>
-      <p>Document: {doc.filename ?? "(unknown)"}</p>
+      <p style={{ marginBottom: 12 }}>
+        <Link href={`/runs/${runId}`}>&larr; Back to run</Link>
+      </p>
 
-      <section>
-        <h2>Diagnosis</h2>
+      <div className="rb-page-header">
+        <div className="rb-page-header__body">
+          <span className={cls.eyebrow}>Evidence</span>
+          <h1>{question.question}</h1>
+          <div className="rb-page-header__meta">
+            Gold answer: <strong style={{ fontWeight: 600, color: "var(--rb-text)" }}>{question.goldAnswer}</strong>
+            {" · "}
+            <span className={cls.mono}>{doc.filename ?? "(unknown document)"}</span>
+          </div>
+        </div>
+      </div>
+
+      <section className={cls.section}>
+        <SectionHead title="Diagnosis" />
         {attribution ? (
-          <>
-            <p>
-              <span
-                style={{
-                  background: VERDICT_COLOR[attribution.verdict], color: "white",
-                  padding: "2px 8px", borderRadius: 4, fontWeight: "bold",
-                }}
-              >
-                {attribution.verdict}
-              </span>{" "}
-              <code>{attribution.counterfactuals.rule}</code>
+          <div className={cls.cardPad}>
+            <div className={cls.row} style={{ marginBottom: 12 }}>
+              <StatusBadge
+                status={attribution.verdict}
+                tone={VERDICT_TONE[attribution.verdict]}
+                variant="solid"
+              />
+              <code className={cls.code}>{attribution.counterfactuals.rule}</code>
+            </div>
+            <p style={{ maxWidth: "70ch" }}>
+              {attribution.explanation ?? <span className={cls.muted}>explanation unavailable</span>}
             </p>
-            <p>{attribution.explanation ?? "explanation unavailable"}</p>
-            <h3>Counterfactual matrix</h3>
-            <MatrixTable matrix={attribution.counterfactuals.matrix} />
-            {attribution.counterfactuals.skipped.length > 0 ? (
-              <>
-                <h3>Skipped</h3>
-                <ul>
-                  {attribution.counterfactuals.skipped.map((s) => <li key={s}>{s}</li>)}
-                </ul>
-              </>
-            ) : null}
-          </>
+            <div style={{ marginTop: 16 }}>
+              <span className={cls.eyebrow}>Signals</span>
+              <SignalsBlock signals={attribution.counterfactuals.signals} />
+            </div>
+          </div>
         ) : (
-          <div>
+          <div className={cls.cardPad}>
             <p>
               {initialResultStatus === "done" || initialResultStatus === "failed"
                 ? "Not yet diagnosed."
@@ -260,14 +280,22 @@ export function EvidenceClient({
                 so the button (and its try-again/error state) is gated to hit === false. */}
             {hit === false ? (
               <>
-                <button type="button" onClick={diagnose} disabled={posting || polling}>
+                <button
+                  type="button"
+                  className={cls.btnPrimary}
+                  style={{ marginTop: 12 }}
+                  onClick={diagnose}
+                  disabled={posting || polling}
+                >
                   {posting ? "Starting…" : polling ? "Diagnosing…" : timedOut ? "Try again" : "Diagnose"}
                 </button>
-                {timedOut ? <p role="alert">Still not ready after 30s -- click Diagnose to check again.</p> : null}
-                {diagnoseError ? <p role="alert">{diagnoseError}</p> : null}
+                {timedOut ? (
+                  <Notice tone="warning">Still not ready after 30s -- click Diagnose to check again.</Notice>
+                ) : null}
+                {diagnoseError ? <Notice>{diagnoseError}</Notice> : null}
               </>
             ) : hit === true ? (
-              <p style={{ color: GREY }}>
+              <p className={cls.muted} style={{ marginTop: 8 }}>
                 This result retrieved the gold chunk (a hit) -- diagnosis explains retrieval misses, not hits.
               </p>
             ) : null}
@@ -275,55 +303,105 @@ export function EvidenceClient({
         )}
       </section>
 
-      <section>
-        <h2>Evidence</h2>
+      {attribution ? (
+        <section className={cls.section}>
+          <SectionHead
+            title="Counterfactual matrix"
+            hint="What the same question would have done under one changed variable."
+          />
+          <MatrixTable matrix={attribution.counterfactuals.matrix} />
+          {attribution.counterfactuals.skipped.length > 0 ? (
+            <div style={{ marginTop: 12 }}>
+              <span className={cls.eyebrow}>Skipped</span>
+              <ul className={cls.muted} style={{ paddingLeft: 20, fontSize: 13 }}>
+                {attribution.counterfactuals.skipped.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <section className={cls.section}>
+        <SectionHead
+          title="Source document"
+          hint={doc.text !== null ? `${text.length.toLocaleString()} characters` : undefined}
+        />
         {doc.text === null ? (
-          <p>Document text unavailable.</p>
+          <p className={cls.muted}>Document text unavailable.</p>
         ) : (
           <>
-            <p>
-              {windowStart > 0 ? (
-                <button type="button" onClick={() => setWindowStart((w) => Math.max(0, w - WINDOW_PAD))}>
-                  Show {Math.min(WINDOW_PAD, windowStart)} more chars before
-                </button>
-              ) : null}{" "}
-              {windowEnd < text.length ? (
-                <button type="button" onClick={() => setWindowEnd((w) => Math.min(text.length, w + WINDOW_PAD))}>
-                  Show {Math.min(WINDOW_PAD, text.length - windowEnd)} more chars after
-                </button>
-              ) : null}{" "}
-              {windowStart > 0 || windowEnd < text.length ? (
-                <button type="button" onClick={() => { setWindowStart(0); setWindowEnd(text.length); }}>
-                  Show full document
-                </button>
-              ) : null}
-            </p>
-            <div style={{ border: "1px solid #d0d7de", padding: "8px 12px", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
-              {windowStart > 0 ? "… " : null}
+            <div className={cls.doc}>
+              {windowStart > 0 ? <span className={cls.muted}>… </span> : null}
               {segments.map((seg) => {
                 const style: CSSProperties = {};
-                if (seg.boundaryChunkIdxs) {
-                  style.borderLeft = `2px solid ${GREY}`;
-                  style.paddingLeft = 2;
-                  style.marginLeft = 1;
-                }
-                if (seg.isEvidence && !seg.isGold) style.background = "rgba(154,103,0,0.12)";
+                if (seg.isEvidence && !seg.isGold) style.background = EVIDENCE_TINT;
                 const title = seg.boundaryChunkIdxs
                   ? `chunk ${seg.boundaryChunkIdxs.join(", ")} starts here`
                   : undefined;
-                const content = seg.isGold ? <mark style={{ background: "#fff3b8" }}>{seg.text}</mark> : seg.text;
+                const content = seg.isGold ? <mark>{seg.text}</mark> : seg.text;
                 return (
-                  <span key={seg.start} style={style} title={title}>
+                  <span
+                    key={seg.start}
+                    className={cx(seg.boundaryChunkIdxs && cls.tick)}
+                    style={style}
+                    title={title}
+                  >
                     {content}
                   </span>
                 );
               })}
-              {windowEnd < text.length ? " …" : null}
+              {windowEnd < text.length ? <span className={cls.muted}> …</span> : null}
             </div>
-            <p style={{ color: GREY, fontSize: "0.9em" }}>
-              Vertical ticks mark where a chunk starts (hover for its index); the amber tint marks
-              chunks the diagnosis used as evidence.
-            </p>
+
+            <div className={cls.legend}>
+              <span className={cls.legendItem}>
+                <span className={cls.legendSwatch} style={{ background: GOLD_FILL, borderColor: "#d4a72c" }} />
+                gold answer span
+              </span>
+              <span className={cls.legendItem}>
+                <span
+                  className={cls.legendSwatch}
+                  style={{ background: "transparent", borderLeft: "3px solid var(--rb-border-strong)" }}
+                />
+                chunk boundary (hover for its index)
+              </span>
+              <span className={cls.legendItem}>
+                <span className={cls.legendSwatch} style={{ background: EVIDENCE_TINT }} />
+                chunk the diagnosis used as evidence
+              </span>
+            </div>
+
+            {windowStart > 0 || windowEnd < text.length ? (
+              <div className={cls.row} style={{ marginTop: 12 }}>
+                {windowStart > 0 ? (
+                  <button
+                    type="button"
+                    className={cls.btn}
+                    onClick={() => setWindowStart((w) => Math.max(0, w - WINDOW_PAD))}
+                  >
+                    ↑ {Math.min(WINDOW_PAD, windowStart)} more chars before
+                  </button>
+                ) : null}
+                {windowEnd < text.length ? (
+                  <button
+                    type="button"
+                    className={cls.btn}
+                    onClick={() => setWindowEnd((w) => Math.min(text.length, w + WINDOW_PAD))}
+                  >
+                    ↓ {Math.min(WINDOW_PAD, text.length - windowEnd)} more chars after
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={cls.btnGhost}
+                  onClick={() => { setWindowStart(0); setWindowEnd(text.length); }}
+                >
+                  Show full document
+                </button>
+              </div>
+            ) : null}
           </>
         )}
       </section>

@@ -1,8 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { Attribution } from "@/lib/attribution";
+import { PageHeader, SectionHead } from "@/components/page-header";
+import { StatusBadge } from "@/components/status-badge";
+import { EmptyState } from "@/components/empty-state";
+import { DataTable } from "@/components/data-table";
+import { Notice } from "@/components/notice";
+import { cellTone, cls, cx, state, VERDICT_TONE } from "@/lib/ui";
 
 type RunDetail = {
   id: string;
@@ -59,28 +65,6 @@ type CellDetail = {
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "cancelled"]);
 
-// Same palette as corpus-client/test-sets-client's STATUS_COLOR (green/amber/red/grey), reused here
-// for run status and for grid cells so both sections read as one system.
-const RUN_STATUS_COLOR: Record<string, string> = {
-  pending: "#57606a",
-  running: "#9a6700",
-  done: "#1a7f37",
-  failed: "#cf222e",
-  cancelled: "#57606a",
-};
-const GREEN = "#1a7f37";
-const RED = "#cf222e";
-const AMBER = "#9a6700";
-const GREY = "#57606a";
-
-// Same verdict->color mapping as evidence-client.tsx (per-file constants by house convention, not a
-// shared module -- see plan 6 for any future consolidation): retrieval (raise k) is closest to a
-// quick fix, hence green; chunking/embedding both need rebuilding artifacts; unanswerable reads as
-// a likely test-set issue rather than a pipeline failure, hence neutral grey.
-const VERDICT_COLOR: Record<Attribution["verdict"], string> = {
-  retrieval: GREEN, chunking: AMBER, embedding: RED, unanswerable: GREY,
-};
-
 type AttrState = {
   attribution: Attribution | null;
   posting: boolean;
@@ -96,8 +80,6 @@ const POLL_INTERVAL_MS = 2000;
 // writes no row at all, task-2-report.md) re-enables the button instead of spinning forever.
 const POLL_TIMEOUT_MS = 30000;
 
-const cellStyle: CSSProperties = { border: "1px solid #d0d7de", padding: "4px 8px", textAlign: "left" };
-
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
 }
@@ -108,15 +90,6 @@ function fmtNum(v: number | null, digits = 2): string {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
-}
-
-/** A `failed` cell can still carry a real hit/rr (retrieval succeeded, answer/judge failed): amber,
- * but with the hit/miss word still shown rather than hidden behind "failed". */
-function cellColor(cell: GridCell): string {
-  if (cell.status === "failed") return AMBER;
-  if (cell.hit === true) return GREEN;
-  if (cell.hit === false) return RED;
-  return GREY;
 }
 
 function cellText(cell: GridCell): string {
@@ -142,17 +115,6 @@ function judgeReason(judgeRaw: { raw: string } | null): string | null {
   }
   return judgeRaw.raw;
 }
-
-const cellButtonStyle: CSSProperties = {
-  display: "block",
-  width: "100%",
-  border: "none",
-  color: "white",
-  padding: "4px 8px",
-  textAlign: "left",
-  font: "inherit",
-  cursor: "pointer",
-};
 
 export function RunClient({ runId }: { runId: string }) {
   const [data, setData] = useState<RunResponse | null>(null);
@@ -325,191 +287,292 @@ export function RunClient({ runId }: { runId: string }) {
   // later failed poll is a banner over data that is merely stale -- swapping the whole page for one
   // line of text on a transient blip throws away the results the user is reading, and the drawer
   // with them.
-  if (loadError && !data) return <p role="alert">{loadError}</p>;
-  if (!data) return <p>Loading…</p>;
+  if (loadError && !data) return <Notice>{loadError}</Notice>;
+  if (!data) return <p className={cls.muted}>Loading…</p>;
 
   const { run, configs, grid } = data;
   const selectedDetail = selected ? cellCache[cellKey(selected.configId, selected.questionId)] : undefined;
   const selectedResultId = selectedDetail?.result.id;
   const selectedAttr = selectedResultId ? attrByResult[selectedResultId] : undefined;
+  const selectedHit = selectedDetail?.result.hit;
 
   return (
     <div>
-      {loadError ? (
-        <p role="alert" style={{ color: RED }}>
-          {loadError} — showing the last data that loaded.
+      {loadError ? <Notice role="status" tone="warning">{loadError} — showing the last data that loaded.</Notice> : null}
+
+      <PageHeader
+        eyebrow="Run"
+        title={<span className={cls.mono} style={{ fontSize: 20 }}>{run.id.slice(0, 8)}</span>}
+        meta={
+          <span className={cls.row} style={{ gap: 8 }}>
+            <StatusBadge status={run.status} />
+            <span>·</span>
+            <span>{run.mode}</span>
+            <span>·</span>
+            <span>judge {run.judgeModel ?? "—"}</span>
+            {run.mode === "full" ? (
+              <>
+                <span>·</span>
+                <span>answer {run.answerModel ?? "(same as judge)"}</span>
+              </>
+            ) : null}
+          </span>
+        }
+        actions={
+          <Link href={`/projects/${run.projectId}`} className={cls.btn}>
+            Back to project
+          </Link>
+        }
+      />
+
+      {run.totalJobs > 0 ? (
+        <p className={cls.row} style={{ marginBottom: 24 }}>
+          <progress
+            className={cls.progress}
+            value={run.completedJobs}
+            max={run.totalJobs}
+            aria-label="Run progress"
+          />
+          <span className={cx(cls.mono, cls.muted)}>
+            {run.completedJobs}/{run.totalJobs} jobs
+          </span>
         </p>
       ) : null}
-      <h1>Run {run.id.slice(0, 8)}</h1>
-      <p>
-        Mode: {run.mode} · Judge: {run.judgeModel ?? "--"}
-        {run.mode === "full" ? ` · Answer: ${run.answerModel ?? "(same as judge)"}` : ""}
-      </p>
-      <p>Status: <span style={{ color: RUN_STATUS_COLOR[run.status] }}>{run.status}</span></p>
-      {run.totalJobs > 0 ? <progress value={run.completedJobs} max={run.totalJobs} /> : null}
-      {run.error ? <p role="alert">{run.error}</p> : null}
+      {run.error ? <Notice>{run.error}</Notice> : null}
 
-      <section>
-        <h2>Config summary</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Config</th>
-              <th style={cellStyle}>Top K</th>
-              <th style={cellStyle}>Evaluated</th>
-              <th style={cellStyle}>Failed</th>
-              <th style={cellStyle}>Hit rate</th>
-              <th style={cellStyle}>MRR</th>
-              <th style={cellStyle}>Faithfulness</th>
-              <th style={cellStyle}>Correctness</th>
+      <section className={cls.section}>
+        <SectionHead title="Config summary" hint="One row per config, over the whole test set." />
+        <DataTable
+          isEmpty={configs.length === 0}
+          empty={<EmptyState title="This run has no configs" />}
+          head={
+            <>
+              <th>Config</th>
+              <th className={cls.num}>Top K</th>
+              <th className={cls.num}>Evaluated</th>
+              <th className={cls.num}>Failed</th>
+              <th className={cls.num}>Hit rate</th>
+              <th className={cls.num}>MRR</th>
+              <th className={cls.num}>Faithfulness</th>
+              <th className={cls.num}>Correctness</th>
+            </>
+          }
+        >
+          {configs.map((c) => (
+            <tr key={c.config.id}>
+              <td>{c.config.name}</td>
+              <td className={cls.num}>{c.config.topK}</td>
+              <td className={cls.num}>
+                {c.aggregates.evaluated}/{c.aggregates.questions}
+              </td>
+              <td className={cls.num} style={{ color: c.aggregates.failed > 0 ? state.danger : undefined }}>
+                {c.aggregates.failed}
+              </td>
+              <td className={cls.num}>{fmtPct(c.aggregates.hitRate)}</td>
+              <td className={cls.num}>{fmtNum(c.aggregates.mrr, 3)}</td>
+              <td className={cls.num}>{fmtNum(c.aggregates.avgFaithfulness)}</td>
+              <td className={cls.num}>{fmtNum(c.aggregates.avgCorrectness)}</td>
             </tr>
-          </thead>
-          <tbody>
-            {configs.map((c) => (
-              <tr key={c.config.id}>
-                <td style={cellStyle}>{c.config.name}</td>
-                <td style={cellStyle}>{c.config.topK}</td>
-                <td style={cellStyle}>{c.aggregates.evaluated} / {c.aggregates.questions}</td>
-                <td style={cellStyle}>{c.aggregates.failed}</td>
-                <td style={cellStyle}>{fmtPct(c.aggregates.hitRate)}</td>
-                <td style={cellStyle}>{fmtNum(c.aggregates.mrr, 3)}</td>
-                <td style={cellStyle}>{fmtNum(c.aggregates.avgFaithfulness)}</td>
-                <td style={cellStyle}>{fmtNum(c.aggregates.avgCorrectness)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </section>
 
-      <section>
-        <h2>Questions</h2>
-        <table style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={cellStyle}>Question</th>
+      <section className={cls.section}>
+        <SectionHead title="Questions" hint="Select a cell to inspect what that config retrieved." />
+        <DataTable
+          className={cls.grid}
+          isEmpty={grid.length === 0}
+          empty={
+            <EmptyState
+              title="No questions in this run's test set"
+              hint="Nothing was scheduled, so there is nothing to grade."
+            />
+          }
+          head={
+            <>
+              <th>Question</th>
               {configs.map((c) => (
-                <th key={c.config.id} style={cellStyle}>{c.config.name}</th>
+                <th key={c.config.id}>{c.config.name}</th>
               ))}
+            </>
+          }
+        >
+          {grid.map((row) => (
+            <tr key={row.questionId}>
+              <td className={cls.gridQuestion}>{row.question}</td>
+              {configs.map((c) => {
+                const cell = row.perConfig[c.config.id];
+                const isSelected =
+                  selected?.configId === c.config.id && selected?.questionId === row.questionId;
+                return (
+                  <td key={c.config.id}>
+                    {cell ? (
+                      <button
+                        type="button"
+                        onClick={() => openCell(c.config.id, row.questionId)}
+                        className={cx(cls.cell, isSelected && cls.cellSelected)}
+                        style={{ background: state[cellTone(cell)] }}
+                        aria-pressed={isSelected}
+                        aria-label={`${c.config.name}: ${cellText(cell)} — ${truncate(row.question, 80)}`}
+                      >
+                        {cellText(cell)}
+                      </button>
+                    ) : (
+                      // Not a button: nothing has been scheduled for this pair yet, so there is no
+                      // result to open. Its own text carries the meaning, no aria-label needed.
+                      <div className={cls.cellPending}>pending</div>
+                    )}
+                  </td>
+                );
+              })}
             </tr>
-          </thead>
-          <tbody>
-            {grid.map((row) => (
-              <tr key={row.questionId}>
-                <td style={cellStyle}>{row.question}</td>
-                {configs.map((c) => {
-                  const cell = row.perConfig[c.config.id];
-                  return (
-                    <td key={c.config.id} style={{ ...cellStyle, padding: 0 }}>
-                      {cell ? (
-                        <button
-                          type="button"
-                          onClick={() => openCell(c.config.id, row.questionId)}
-                          style={{ ...cellButtonStyle, background: cellColor(cell) }}
-                        >
-                          {cellText(cell)}
-                        </button>
-                      ) : (
-                        <div style={{ ...cellButtonStyle, background: GREY, opacity: 0.35, cursor: "default" }}>
-                          pending
-                        </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </section>
 
       {selected ? (
-        <section style={{ border: "1px solid #d0d7de", padding: "8px 12px", marginTop: "1em" }}>
-          <button type="button" onClick={() => setSelected(null)}>Close</button>
-          {drawerLoading ? <p>Loading…</p> : null}
-          {drawerError ? <p role="alert">{drawerError}</p> : null}
+        <section className={cls.drawer} aria-label="Result detail">
+          <div className={cls.drawerHead}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span className={cls.eyebrow}>Result</span>
+              <h3>{selectedDetail?.question.question ?? "Loading…"}</h3>
+              {selectedDetail ? (
+                <p className={cls.muted} style={{ marginTop: 4 }}>
+                  Gold answer: {selectedDetail.question.goldAnswer}
+                </p>
+              ) : null}
+            </div>
+            <div className={cls.row}>
+              {/* Always available, at every status: the evidence view renders the document with the
+                  gold span and chunk boundaries whether or not the row has been evaluated, and a
+                  pending cell is exactly when someone wants to look at the source. */}
+              {selectedResultId ? (
+                <Link href={`/results/${selectedResultId}`} className={cls.btn}>
+                  Evidence →
+                </Link>
+              ) : null}
+              <button
+                type="button"
+                className={cls.btn}
+                onClick={() => setSelected(null)}
+                aria-label="Close result detail"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+
+          {drawerLoading ? <p className={cls.muted}>Loading…</p> : null}
+          {drawerError ? <Notice>{drawerError}</Notice> : null}
+
           {selectedDetail ? (
             <div>
-              <h3>{selectedDetail.question.question}</h3>
-              <p>Gold answer: {selectedDetail.question.goldAnswer}</p>
-              {selectedDetail.result.error ? <p role="alert">{selectedDetail.result.error}</p> : null}
+              {selectedDetail.result.error ? <Notice>{selectedDetail.result.error}</Notice> : null}
 
-              <h4>Retrieved chunks</h4>
-              <table style={{ borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={cellStyle}>Rank</th>
-                    <th style={cellStyle}>Score</th>
-                    <th style={cellStyle}>File</th>
-                    <th style={cellStyle}>Text</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <div className={cls.drawerBlock}>
+                <SectionHead title="Retrieved chunks" />
+                <DataTable
+                  isEmpty={selectedDetail.result.retrieved.length === 0}
+                  empty={<EmptyState title="Nothing was retrieved for this question" />}
+                  head={
+                    <>
+                      <th className={cls.num}>Rank</th>
+                      <th className={cls.num}>Score</th>
+                      <th>File</th>
+                      <th>Text</th>
+                    </>
+                  }
+                >
                   {selectedDetail.result.retrieved.map((r) => (
                     <tr key={r.chunkId}>
-                      <td style={cellStyle}>{r.rank}</td>
-                      <td style={cellStyle}>{r.score.toFixed(3)}</td>
-                      <td style={cellStyle}>{r.filename ?? ""}</td>
-                      <td style={cellStyle}>{r.text ? truncate(r.text, 300) : ""}</td>
+                      <td className={cls.num}>{r.rank}</td>
+                      <td className={cls.num}>{r.score.toFixed(3)}</td>
+                      <td className={cls.muted}>{r.filename ?? ""}</td>
+                      <td>{r.text ? truncate(r.text, 300) : ""}</td>
                     </tr>
                   ))}
-                </tbody>
-              </table>
+                </DataTable>
+              </div>
 
-              <h4>Answer</h4>
-              <p>{selectedDetail.result.answer ?? "(no answer generated)"}</p>
+              <div className={cls.drawerBlock}>
+                <SectionHead title="Answer" />
+                <div className={cls.cardPad}>
+                  {selectedDetail.result.answer ?? (
+                    <span className={cls.muted}>(no answer generated)</span>
+                  )}
+                </div>
+              </div>
 
-              <h4>Judge</h4>
-              <p>
-                Faithfulness: {fmtNum(selectedDetail.result.faithfulness)} · Correctness:{" "}
-                {fmtNum(selectedDetail.result.correctness)}
-              </p>
-              {judgeReason(selectedDetail.result.judgeRaw) ? <p>{judgeReason(selectedDetail.result.judgeRaw)}</p> : null}
+              <div className={cls.drawerBlock}>
+                <SectionHead
+                  title="Judge"
+                  hint={
+                    <>
+                      faithfulness <span className={cls.mono}>{fmtNum(selectedDetail.result.faithfulness)}</span>
+                      {" · "}
+                      correctness <span className={cls.mono}>{fmtNum(selectedDetail.result.correctness)}</span>
+                    </>
+                  }
+                />
+                {judgeReason(selectedDetail.result.judgeRaw) ? (
+                  <div className={cls.cardPad}>{judgeReason(selectedDetail.result.judgeRaw)}</div>
+                ) : (
+                  <p className={cls.muted}>(no judge reasoning recorded)</p>
+                )}
+              </div>
 
-              <h4>Diagnosis</h4>
-              {selectedResultId ? (
-                <p>
-                  {selectedAttr?.attribution ? (
-                    <span
-                      style={{
-                        background: VERDICT_COLOR[selectedAttr.attribution.verdict], color: "white",
-                        padding: "2px 8px", borderRadius: 4, marginRight: 8,
-                      }}
-                    >
-                      {selectedAttr.attribution.verdict}
-                    </span>
-                  ) : null}
-                  {/* decideVerdict's precondition is a missed question -- diagnosing a hit row would
-                      run the decision table on an input it was never meant to see (rule 3/4's
-                      "unanswerable" fallback fires on a within-k hit, a false verdict). Offer the
-                      control only on a genuine miss; a hit row gets an explanatory line instead. */}
-                  {!selectedAttr?.attribution && selectedDetail.result.hit === false ? (
-                    <button
-                      type="button"
-                      onClick={() => diagnose(selectedResultId)}
-                      disabled={selectedAttr?.posting || selectedAttr?.polling}
-                      style={{ marginRight: 8 }}
-                    >
-                      {selectedAttr?.posting
-                        ? "Starting…"
-                        : selectedAttr?.polling
-                          ? "Diagnosing…"
-                          : selectedAttr?.timedOut
-                            ? "Try again"
-                            : "Diagnose"}
-                    </button>
-                  ) : null}
-                  {selectedDetail.result.hit !== null || selectedAttr?.attribution ? (
-                    <Link href={`/results/${selectedResultId}`}>Evidence →</Link>
-                  ) : null}
-                  {selectedDetail.result.hit === true ? (
-                    <span style={{ color: GREY, marginLeft: 8 }}>
-                      retrieval hit at rank {rankFromRR(selectedDetail.result.reciprocalRank) ?? "?"} —
-                      diagnosis explains retrieval misses
-                    </span>
-                  ) : null}
-                  {selectedAttr?.timedOut ? <span role="alert"> — still not ready after 30s</span> : null}
-                  {selectedAttr?.error ? <span role="alert"> — {selectedAttr.error}</span> : null}
-                </p>
+              {/* The heading appears only when there is a diagnosis to show or an action to offer.
+                  A cell still pending (hit === null, never diagnosed) has neither, and a bare
+                  "Diagnosis" heading over nothing reads as a section that failed to load. */}
+              {selectedResultId && (selectedAttr?.attribution || selectedHit !== null) ? (
+                <div className={cls.drawerBlock}>
+                  <SectionHead title="Diagnosis" />
+                  <p className={cls.row}>
+                    {selectedAttr?.attribution ? (
+                      <StatusBadge
+                        status={selectedAttr.attribution.verdict}
+                        tone={VERDICT_TONE[selectedAttr.attribution.verdict]}
+                        variant="solid"
+                      />
+                    ) : null}
+                    {/* decideVerdict's precondition is a missed question -- diagnosing a hit row would
+                        run the decision table on an input it was never meant to see (rule 3/4's
+                        "unanswerable" fallback fires on a within-k hit, a false verdict). Offer the
+                        control only on a genuine miss; a hit row gets an explanatory line instead. */}
+                    {!selectedAttr?.attribution && selectedHit === false ? (
+                      <button
+                        type="button"
+                        className={cls.btn}
+                        onClick={() => diagnose(selectedResultId)}
+                        disabled={selectedAttr?.posting || selectedAttr?.polling}
+                      >
+                        {selectedAttr?.posting
+                          ? "Starting…"
+                          : selectedAttr?.polling
+                            ? "Diagnosing…"
+                            : selectedAttr?.timedOut
+                              ? "Try again"
+                              : "Diagnose"}
+                      </button>
+                    ) : null}
+                    {selectedHit === true ? (
+                      <span className={cls.muted}>
+                        retrieval hit at rank {rankFromRR(selectedDetail.result.reciprocalRank) ?? "?"} —
+                        diagnosis explains retrieval misses
+                      </span>
+                    ) : null}
+                    {selectedAttr?.timedOut ? (
+                      <span role="alert" style={{ color: state.warning }}>
+                        still not ready after 30s
+                      </span>
+                    ) : null}
+                    {selectedAttr?.error ? (
+                      <span role="alert" style={{ color: state.danger }}>
+                        {selectedAttr.error}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
               ) : null}
             </div>
           ) : null}

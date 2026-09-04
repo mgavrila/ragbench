@@ -4,6 +4,7 @@ import { evalRuns, projects } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
 import { parseUuid } from "@/lib/params";
+import { AppShell } from "@/components/app-shell";
 import { RunClient } from "./run-client";
 
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
@@ -27,5 +28,11 @@ export default async function RunPage({ params }: { params: Promise<{ runId: str
 
   if (!row || row.organizationId !== session.user.organizationId) notFound();
 
-  return <RunClient runId={runId} />;
+  // `wide`: the question grid gains a column per config, so this page gets the wider content
+  // column while every other page keeps the reading-width default.
+  return (
+    <AppShell wide>
+      <RunClient runId={runId} />
+    </AppShell>
+  );
 }
