@@ -217,13 +217,14 @@ export function EvalClient({ projectId }: { projectId: string }) {
               </option>
             ))}
           </select>
-          {/* Options come from every model REQUESTED for the set, so a model whose embed job is
-              still queued (or failed) stays visible and accounted for -- but it is disabled until
-              its vectors exist, because a config built on it retrieves nothing and every question
-              in every run using it fails. */}
+          {/* Options are the union of every model REQUESTED for the set and every model that
+              actually HAS vectors: a model whose embed job is still queued (or failed) stays
+              visible and accounted for -- but disabled until its vectors exist, because a config
+              built on it retrieves nothing -- and a model embedded before requests were recorded
+              (pre-0003 rows) is still offered rather than hidden. */}
           <select value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)} required>
             <option value="" disabled>Embedding model...</option>
-            {(selectedChunkSet?.embedModels ?? []).map((m) => {
+            {[...new Set([...(selectedChunkSet?.embedModels ?? []), ...(selectedChunkSet?.embeddedModels ?? [])])].map((m) => {
               const embedded = selectedChunkSet?.embeddedModels.includes(m) ?? false;
               return (
                 <option key={m} value={m} disabled={!embedded}>
