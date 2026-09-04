@@ -33,8 +33,10 @@ const POLL_INTERVAL_MS = 2000;
 // only recovery path, so the UI must hand control back to the user rather than waiting indefinitely.
 const POLL_TIMEOUT_MS = 30000;
 
-/** The gold highlight, also used for the legend swatch so the two cannot drift apart. */
-const GOLD_FILL = "#fff3b8";
+/** The gold highlight, as references to the tokens `.rb-doc mark` is painted from -- the legend
+ * swatch has to match the marks in the document exactly, and a copied hex would drift. */
+const GOLD_FILL = "var(--rb-gold)";
+const GOLD_LINE = "var(--rb-gold-line)";
 /** The tint over chunks the diagnosis actually leaned on. Amber at 12% -- readable text over it. */
 const EVIDENCE_TINT = "rgba(154,103,0,0.12)";
 
@@ -357,7 +359,7 @@ export function EvidenceClient({
 
             <div className={cls.legend}>
               <span className={cls.legendItem}>
-                <span className={cls.legendSwatch} style={{ background: GOLD_FILL, borderColor: "#d4a72c" }} />
+                <span className={cls.legendSwatch} style={{ background: GOLD_FILL, borderColor: GOLD_LINE }} />
                 gold answer span
               </span>
               <span className={cls.legendItem}>

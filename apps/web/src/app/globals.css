@@ -28,6 +28,12 @@
   --rb-accent: #0969da;
   --rb-accent-subtle: #ddf4ff;
 
+  /* The gold span's fill and its underline. Not a state colour -- it marks WHERE the answer is,
+     not how the pipeline did -- so it lives with the neutrals, defined once here and referenced
+     from evidence-client for the legend swatch that has to match it exactly. */
+  --rb-gold: #fff3b8;
+  --rb-gold-line: #d4a72c;
+
   --rb-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   /* Not a second display face: a mono stack for identifiers, hashes and numeric columns, so
      digits line up down a column and an 8-char hash reads as an opaque token rather than prose. */
@@ -648,8 +654,8 @@ input[type="file"].rb-input {
 .rb-doc mark {
   padding: 1px 0;
   color: var(--rb-text);
-  background: #fff3b8;
-  box-shadow: inset 0 -2px 0 #d4a72c;
+  background: var(--rb-gold);
+  box-shadow: inset 0 -2px 0 var(--rb-gold-line);
 }
 
 /* A chunk boundary, in the flow of the text: the tick is what makes "the answer was split in half"

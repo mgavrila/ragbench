@@ -31,7 +31,7 @@ export default async function LoginPage({
   }
 
   return (
-    <div className="rb-auth">
+    <main className="rb-auth">
       <div className="rb-auth__card">
         <span className={cls.eyebrow}>RAGBench</span>
         <h1>Log in</h1>
@@ -59,6 +59,6 @@ export default async function LoginPage({
           No account? <Link href="/signup">Sign up</Link>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

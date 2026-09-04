@@ -23,7 +23,7 @@ export default async function SignupPage({
   }
 
   return (
-    <div className="rb-auth">
+    <main className="rb-auth">
       <div className="rb-auth__card">
         <span className={cls.eyebrow}>RAGBench</span>
         <h1>Create an account</h1>
@@ -61,6 +61,6 @@ export default async function SignupPage({
           Already have one? <Link href="/login">Log in</Link>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

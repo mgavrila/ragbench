@@ -3,7 +3,7 @@ import { cls } from "@/lib/ui";
 
 export default function Home() {
   return (
-    <div className="rb-auth">
+    <main className="rb-auth">
       <div className="rb-auth__card">
         <span className={cls.eyebrow}>RAGBench</span>
         <h1>Which part of your RAG pipeline lost the answer?</h1>
@@ -20,6 +20,6 @@ export default function Home() {
           </Link>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
