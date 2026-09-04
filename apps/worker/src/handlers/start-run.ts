@@ -1,7 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import {
-  chunkEmbeddings, chunkSets, chunks, evalRunConfigs, evalRuns, projects, ragConfigs, testQuestions,
-  type Db,
+  chunkEmbeddings, chunkSets, chunks, evalRunConfigs, evalRuns, projects, questionResults,
+  ragConfigs, testQuestions, type Db,
 } from "@ragbench/db";
 import { enqueue, type JobHandler } from "../queue";
 
@@ -123,10 +123,23 @@ export const startRunHandler: JobHandler<{ runId: string; organizationId: string
       }
     }
 
+    // Monotonic, mirroring recordProgress's guard on completedJobs. Re-running start-run (how a
+    // user retries a failed run) recomputes the fan-out against the CURRENT configs and active
+    // questions, which can be smaller than the first attempt's -- a question soft-deleted in
+    // between, a config removed. Result rows from the first attempt are not deleted, so a totalJobs
+    // below the number of rows already completed would leave completedJobs permanently greater than
+    // totalJobs: a progress bar past 100% that never reaches `done`, because recordProgress's
+    // completion check reads `completed >= totalJobs` on a total that keeps being rewritten. Taking
+    // the max keeps the run completable in exactly the case the recount shrank it.
+    const [counted] = await db.select({ n: sql<number>`count(*)`.mapWith(Number) })
+      .from(questionResults).where(eq(questionResults.runId, runId));
+    const alreadyCompleted = Math.max(run.completedJobs, counted?.n ?? 0);
+    const totalJobs = Math.max(configs.length * questions.length, alreadyCompleted);
+
     // `error` is cleared here so a run retried after a fixed configuration does not keep displaying
     // the failure it just recovered from.
     await db.update(evalRuns)
-      .set({ status: "running", totalJobs: configs.length * questions.length, error: null })
+      .set({ status: "running", totalJobs, error: null })
       .where(eq(evalRuns.id, runId));
 
     // One job per (config, question). The singleton key must be distinct per job: these queues use

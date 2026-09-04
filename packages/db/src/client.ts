@@ -7,8 +7,16 @@ import * as schema from "./schema";
 
 const migrationsFolder = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
-export function createDb(url: string) {
-  const pool = new pg.Pool({ connectionString: url });
+/**
+ * `poolMax` is the pg Pool's connection cap. It is optional and defaults to node-postgres's own
+ * default (10) so the web app is unaffected: a Next.js route handler holds a connection for the
+ * length of one request. The worker passes an explicit value instead, because it runs several
+ * evaluate-question jobs at once and each one holds a connection across provider round trips --
+ * with the default cap, jobs beyond the tenth queue up waiting for a connection rather than for the
+ * provider, and the concurrency knob stops meaning anything. See apps/worker/src/queue.ts.
+ */
+export function createDb(url: string, opts: { poolMax?: number } = {}) {
+  const pool = new pg.Pool({ connectionString: url, ...(opts.poolMax ? { max: opts.poolMax } : {}) });
   const db = drizzle(pool, { schema });
   return { db, pool };
 }

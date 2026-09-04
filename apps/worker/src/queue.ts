@@ -15,12 +15,21 @@ export type JobHandler<T> = (data: T, ctx: { db: Db; boss: PgBoss }) => Promise<
  */
 const CONCURRENT_QUEUE = "evaluate-question";
 const DEFAULT_EVAL_CONCURRENCY = 4;
+/**
+ * Upper bound on the knob. Past a handful of jobs the limit stops being this process and starts
+ * being the provider's rate limit, which answers extra concurrency with 429s -- retries and a
+ * slower run, not a faster one. Each in-flight job also holds a database connection for the length
+ * of its provider round trips, so an unbounded value here silently sizes the connection pool too.
+ * A user who sets 100 gets 8 rather than a startup failure: this is a throughput knob.
+ */
+const MAX_EVAL_CONCURRENCY = 8;
 
 function evalConcurrency(): number {
   const parsed = Number.parseInt(process.env.RAGBENCH_EVAL_CONCURRENCY ?? "", 10);
   // A missing, non-numeric or nonsensical value falls back to the default rather than failing
   // startup: the cap is a throughput knob, and a typo in it should not take the worker down.
-  return Number.isFinite(parsed) ? Math.max(1, parsed) : DEFAULT_EVAL_CONCURRENCY;
+  if (!Number.isFinite(parsed)) return DEFAULT_EVAL_CONCURRENCY;
+  return Math.min(MAX_EVAL_CONCURRENCY, Math.max(1, parsed));
 }
 
 export async function startWorker(opts: {
@@ -28,7 +37,13 @@ export async function startWorker(opts: {
   handlers: Record<string, JobHandler<any>>;
 }) {
   const boss = new PgBoss(opts.databaseUrl);
-  const { db, pool } = createDb(opts.databaseUrl);
+  // Sized for the fan-out: every concurrent evaluate-question job holds a connection for the whole
+  // job (it queries around its provider calls, not only before them), so a pool smaller than the
+  // concurrency makes jobs wait on connections instead of on the provider. The headroom covers the
+  // handlers' own extra queries and the serial queues running alongside; the floor keeps the
+  // default configuration at node-postgres's usual 10 rather than shrinking it.
+  const concurrency = evalConcurrency();
+  const { db, pool } = createDb(opts.databaseUrl, { poolMax: Math.max(10, concurrency + 6) });
   await boss.start();
 
   for (const [name, handler] of Object.entries(opts.handlers)) {
@@ -65,7 +80,7 @@ export async function startWorker(opts: {
     // the queue name: start-run gives every evaluate-question job a distinct `${runId}:...` key
     // (see enqueue()), so several are runnable at once. A queue whose jobs share a key still
     // serializes no matter what this is set to.
-    const localConcurrency = name === CONCURRENT_QUEUE ? evalConcurrency() : 1;
+    const localConcurrency = name === CONCURRENT_QUEUE ? concurrency : 1;
     // work() hands over an array because pg-boss can fetch in batches; iterate rather than
     // destructuring the first element, so setting batchSize later cannot silently drop jobs.
     await boss.work(name, { localConcurrency }, async (jobs) => {

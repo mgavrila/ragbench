@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import {
   createDb, organizations, projects, documents, chunkEmbeddings, chunkSets, chunks, evalRunConfigs,
   evalRuns, questionResults, ragConfigs, testQuestions, testSets, usageLog,
@@ -298,6 +298,49 @@ describe("startRunHandler", () => {
     const [stillDone] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, done.id));
     expect(stillDone.status).toBe("done");
     expect(stillDone.totalJobs).toBe(0);
+  });
+
+  // Re-enqueuing start-run is how a user retries a run, and the recount it does can come out SMALLER
+  // than the first attempt's fan-out (a question soft-deleted in between). The result rows from the
+  // first attempt are still there, so a totalJobs below them would pin completedJobs above
+  // totalJobs: a progress bar past 100% on a run that can never reach `done`.
+  it("never recomputes totalJobs below the work already completed", async () => {
+    const [retrySet] = await ctx.db.insert(testSets).values({
+      projectId, name: "retry-set", generatorModel: "mock-llm", status: "ready",
+    }).returning();
+    const retryQuestions = await ctx.db.insert(testQuestions).values(
+      [0, 1, 2].map((i) => ({
+        testSetId: retrySet.id, documentId: docId, question: `retry ${i}`,
+        goldAnswer: fixtureChunks[0].text,
+        goldStart: fixtureChunks[0].startOffset, goldEnd: fixtureChunks[0].endOffset,
+      })),
+    ).returning();
+    const [cfg] = await ctx.db.insert(ragConfigs).values({
+      projectId, name: "retry-cfg", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+    }).returning();
+    const [run] = await ctx.db.insert(evalRuns).values({
+      projectId, testSetId: retrySet.id, mode: "retrieval-only",
+      status: "running", totalJobs: 3, completedJobs: 3,
+    }).returning();
+    await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+    // The first attempt's three finished rows, which no recount deletes.
+    await ctx.db.insert(questionResults).values(retryQuestions.map((q) => ({
+      runId: run.id, configId: cfg.id, questionId: q.id, hit: false, reciprocalRank: 0,
+      status: "done",
+    })));
+
+    // Two of the three questions are soft-deleted before the retry, so the recount sees one.
+    await ctx.db.update(testQuestions).set({ status: "deleted" })
+      .where(and(eq(testQuestions.testSetId, retrySet.id), ne(testQuestions.id, retryQuestions[0].id)));
+
+    sentJobs.length = 0;
+    await startRunHandler({ runId: run.id, organizationId: orgId }, { db: ctx.db, boss: recordingBoss });
+
+    // The retry itself still fans out only the questions that are still active.
+    expect(evalJobs()).toHaveLength(1);
+    const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
+    expect(after.totalJobs).toBe(3);
+    expect(after.completedJobs).toBe(3);
   });
 
   it("fails the run when it has no configs or its test set has no active questions", async () => {

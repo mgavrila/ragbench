@@ -103,6 +103,23 @@ describe("worker queue", () => {
     }
   });
 
+  // The knob has a ceiling. Past a handful of jobs the limit is the provider's rate limit, which
+  // answers extra concurrency with 429s, and each in-flight job also holds a database connection --
+  // so an unbounded value would quietly size the pool too. A too-large setting is clamped rather
+  // than rejected: it is a throughput knob, not a correctness one.
+  it("clamps RAGBENCH_EVAL_CONCURRENCY to the ceiling instead of honouring it", async () => {
+    const previous = process.env.RAGBENCH_EVAL_CONCURRENCY;
+    process.env.RAGBENCH_EVAL_CONCURRENCY = "50";
+    try {
+      // 9 jobs against a barrier that only releases at 9: with the requested 50 the peak would be 9,
+      // with the ceiling of 8 the barrier times out and the peak stops at 8.
+      expect(await peakConcurrency("evaluate-question", 9, 9)).toBe(8);
+    } finally {
+      if (previous === undefined) delete process.env.RAGBENCH_EVAL_CONCURRENCY;
+      else process.env.RAGBENCH_EVAL_CONCURRENCY = previous;
+    }
+  });
+
   // Only evaluate-question is uncapped. The rest stay one-at-a-time: chunk and embed rebuild a
   // whole set (two at once on the same set would fight over the same rows), and nothing else has a
   // provider round trip worth parallelising.

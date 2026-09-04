@@ -61,30 +61,58 @@ export async function listChunkSets(projectId: string, session: Session | null) 
     .groupBy(chunkSets.id);
 
   // `embedModels` is every model ever REQUESTED for the set; a model is only usable for retrieval
-  // once its vectors exist. The two diverge for as long as an embed job is queued, running, or has
-  // failed outright, and a config built against a merely-requested model produces a run whose every
-  // question fails at retrieval. Reported as its own list (rather than filtering embedModels down)
-  // so the picker can still show a requested-but-not-yet-embedded model, greyed out, instead of
-  // silently dropping the model the user just asked for.
+  // once vectors exist for EVERY chunk in the set. The two diverge for as long as an embed job is
+  // queued, running, or has failed partway, and a config built against a model in either of those
+  // states produces a run that startRunHandler refuses outright. Reported as its own list (rather
+  // than filtering embedModels down) so the picker can still show a requested-but-not-yet-usable
+  // model, greyed out, instead of silently dropping the model the user just asked for.
   //
   // Kept out of the aggregate query above: joining chunk_embeddings there would multiply the rows
   // count(chunks.id) sees, turning chunkCount into chunks x models.
-  const embedded = await db
-    .selectDistinct({ chunkSetId: chunks.chunkSetId, model: chunkEmbeddings.model })
-    .from(chunkEmbeddings)
-    .innerJoin(chunks, eq(chunks.id, chunkEmbeddings.chunkId))
-    .innerJoin(chunkSets, eq(chunkSets.id, chunks.chunkSetId))
-    .where(eq(chunkSets.projectId, projectId));
+  //
+  // Probed per (set, requested model) pair rather than aggregated over the whole project's
+  // chunks-to-embeddings join. That DISTINCT walked every vector in the project to answer a
+  // question about a handful of pairs, and it grew with the corpus while the answer did not. Each
+  // pair's count here is an index lookup per chunk (chunks_set_idx, then chunk_embeddings_uniq on
+  // (chunk_id, model)), and the pair list comes from the sets' own embed_models. A model with
+  // vectors but never recorded in embed_models therefore does not appear -- nothing removes from
+  // that array, and the route that requests an embedding appends to it before enqueueing, so in
+  // practice it is a superset of what has vectors.
+  const coverage = await db.execute<{ chunk_set_id: string; model: string; embedded: number }>(sql`
+    select cs.id as chunk_set_id, m.model as model, cov.embedded as embedded
+    from ${chunkSets} cs
+    cross join lateral jsonb_array_elements_text(cs.embed_models) as m(model)
+    cross join lateral (
+      select count(*)::int as embedded
+      from ${chunks} c
+      join ${chunkEmbeddings} ce on ce.chunk_id = c.id and ce.model = m.model
+      where c.chunk_set_id = cs.id
+    ) cov
+    where cs.project_id = ${projectId}
+  `);
 
-  const embeddedBySet = new Map<string, string[]>();
-  for (const { chunkSetId, model } of embedded) {
-    const list = embeddedBySet.get(chunkSetId);
-    if (list) list.push(model);
-    else embeddedBySet.set(chunkSetId, [model]);
+  const coverageBySet = new Map<string, Array<{ model: string; embedded: number }>>();
+  for (const row of coverage.rows) {
+    const list = coverageBySet.get(row.chunk_set_id) ?? [];
+    list.push({ model: row.model, embedded: row.embedded });
+    coverageBySet.set(row.chunk_set_id, list);
   }
 
   return NextResponse.json({
-    chunkSets: rows.map((r) => ({ ...r, embeddedModels: embeddedBySet.get(r.id) ?? [] })),
+    chunkSets: rows.map((r) => {
+      // `total` is the set's own chunk count from the aggregate above, so a half-finished embed job
+      // shows up as embedded < total. An empty set (total 0) has no usable model at all.
+      const models = (coverageBySet.get(r.id) ?? [])
+        .map((c) => ({ model: c.model, embedded: c.embedded, total: r.chunkCount }));
+      return {
+        ...r,
+        // Usable for a run: every chunk in the set has a vector under this model.
+        embeddedModels: models.filter((m) => m.total > 0 && m.embedded === m.total).map((m) => m.model),
+        // Per-model counts, so the UI can say WHY a requested model is not usable yet ("3/16
+        // chunks embedded") instead of only greying it out.
+        modelCoverage: models,
+      };
+    }),
   });
 }
 

@@ -175,9 +175,45 @@ describe("chunk-sets api", () => {
     expect(row.embeddedModels).toEqual(["mock-embedding"]);
     // The join must not inflate the aggregate: one chunk, one embedding, still one chunk.
     expect(row.chunkCount).toBe(1);
+    // Every REQUESTED model is counted, embedded or not, so the picker can explain the difference.
+    expect(row.modelCoverage).toEqual(
+      expect.arrayContaining([
+        { model: "mock-embedding", embedded: 1, total: 1 },
+        { model: "text-embedding-3-small", embedded: 0, total: 1 },
+      ]),
+    );
 
     // A set with no embeddings at all reports an empty list rather than being omitted.
     const bare = chunkSets.find((s: { id: string; chunker: string }) => s.chunker === "heading");
     expect(bare.embeddedModels).toEqual([]);
+  });
+
+  // A model with vectors for only some of the set's chunks is NOT usable: startRunHandler fails any
+  // run whose config points at one, so offering it in the picker would only produce a run that dies
+  // on start. It stays in modelCoverage with its counts, which is what the UI needs to say why.
+  it("counts a half-embedded model as not usable, with the counts to explain it", async () => {
+    const res = await createChunkSet(
+      projectId, req({ chunker: "fixed", params: { maxTokens: 61 }, embedModel: "mock-embedding" }),
+      session() as never, fakeSend,
+    );
+    const partialSetId = (await res.json()).chunkSet.id;
+    const [doc] = await getDb().insert(documents).values({
+      projectId, filename: "p.md", mime: "text/markdown", contentHash: `hp${Date.now()}`,
+      status: "ready", text: "hello world",
+    }).returning();
+    const inserted = await getDb().insert(chunks).values([
+      { chunkSetId: partialSetId, documentId: doc.id, idx: 0, text: "hello", startOffset: 0, endOffset: 5 },
+      { chunkSetId: partialSetId, documentId: doc.id, idx: 1, text: "world", startOffset: 6, endOffset: 11 },
+    ]).returning();
+    // Only the first of the two chunks gets a vector: an embed job that died halfway.
+    await getDb().insert(chunkEmbeddings).values({
+      chunkId: inserted[0].id, model: "mock-embedding", dimension: 3, embedding: [0.1, 0.2, 0.3],
+    });
+
+    const list = await listChunkSets(projectId, session() as never);
+    const { chunkSets } = await list.json();
+    const row = chunkSets.find((s: { id: string }) => s.id === partialSetId);
+    expect(row.embeddedModels).toEqual([]);
+    expect(row.modelCoverage).toEqual([{ model: "mock-embedding", embedded: 1, total: 2 }]);
   });
 });
