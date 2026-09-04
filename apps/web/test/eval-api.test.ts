@@ -367,6 +367,18 @@ describe("runs api", () => {
       expect((await getResultCell(runId, configId, questionId, null as never)).status).toBe(401);
       expect((await getResultCell(runId, "00000000-0000-0000-0000-000000000000", questionId, session() as never)).status).toBe(404);
     });
+
+    // A typo'd or truncated URL reaches these routes as a path segment that is not a uuid. Without
+    // a guard it goes into `eq(uuidColumn, value)` and Postgres raises "invalid input syntax for
+    // type uuid" -- a 500 for what is really just a wrong address. Every segment is checked, not
+    // only the first: a valid runId with a malformed configId took the same path.
+    it("404s a non-UUID path segment instead of 500ing on an invalid uuid query", async () => {
+      const bad = "not-a-real-id";
+      expect((await getRun(bad, session() as never)).status).toBe(404);
+      expect((await getResultCell(bad, configId, questionId, session() as never)).status).toBe(404);
+      expect((await getResultCell(runId, bad, questionId, session() as never)).status).toBe(404);
+      expect((await getResultCell(runId, configId, bad, session() as never)).status).toBe(404);
+    });
   });
 
   describe("frozen question denominator", () => {

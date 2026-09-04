@@ -214,6 +214,14 @@ describe("questions review", () => {
     expect(questions.map((q: { id: string }) => q.id)).not.toContain(activeQId);
   });
 
+  // Same class-wide guard as the run routes: a malformed id is a wrong address (404), never an
+  // invalid-uuid exception out of Postgres (500).
+  it("404s a non-UUID testSetId or questionId instead of 500ing on an invalid uuid query", async () => {
+    const bad = "not-a-real-id";
+    expect((await listQuestions(bad, session() as never)).status).toBe(404);
+    expect((await deleteQuestion(bad, session() as never)).status).toBe(404);
+  });
+
   it("blocks foreign orgs and unauthenticated requests on delete", async () => {
     expect((await deleteQuestion(deletedQId, foreignSession() as never)).status).toBe(404);
     expect((await deleteQuestion(deletedQId, null as never)).status).toBe(401);

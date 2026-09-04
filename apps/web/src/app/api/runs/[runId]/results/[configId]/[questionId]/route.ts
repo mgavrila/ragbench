@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { chunks, documents, evalRuns, projects, questionResults, testQuestions } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import type { Session } from "next-auth";
 
 /**
@@ -14,6 +15,11 @@ import type { Session } from "next-auth";
  */
 export async function getResultCell(runId: string, configId: string, questionId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // All three segments reach a uuid column, so all three are checked -- a valid runId with a
+  // malformed configId would otherwise pass the ownership query and fail on the row lookup.
+  if (!parseUuid(runId) || !parseUuid(configId) || !parseUuid(questionId)) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
 
   const db = getDb();
   const [owner] = await db.select({ organizationId: projects.organizationId })

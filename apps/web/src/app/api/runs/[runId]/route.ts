@@ -3,6 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { evalRunConfigs, evalRuns, projects, questionResults, ragConfigs, testQuestions } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import type { Session } from "next-auth";
 
 /** `avg` comes back as a string or null over the pg driver; this keeps a null aggregate null (no
@@ -17,6 +18,7 @@ function nullableNumber(v: unknown): number | null {
  */
 export async function getRun(runId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!parseUuid(runId)) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const db = getDb();
   const [row] = await db.select({ run: evalRuns, organizationId: projects.organizationId })

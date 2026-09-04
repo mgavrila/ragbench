@@ -3,12 +3,16 @@ import { eq } from "drizzle-orm";
 import { projects, testSets } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import { QuestionsClient } from "./questions-client";
 
 export default async function TestSetPage({ params }: { params: Promise<{ testSetId: string }> }) {
   const { testSetId } = await params;
   const session = await auth();
   if (!session?.user?.organizationId) redirect("/login");
+  // Same guard as the API routes: a malformed id must render the not-found page, not a 500 from an
+  // invalid-uuid query (see @/lib/params).
+  if (!parseUuid(testSetId)) notFound();
 
   // Same ownership chain as the API routes under /api/test-sets and /api/questions: this page
   // also lives outside /projects/:projectId, so there is no path segment to run requireProject

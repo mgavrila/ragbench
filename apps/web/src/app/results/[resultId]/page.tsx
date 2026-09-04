@@ -1,13 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { attributions, chunks, documents, evalRuns, projects, questionResults, ragConfigs, testQuestions } from "@ragbench/db";
-import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import { EvidenceClient } from "./evidence-client";
 import type { StoredCounterfactuals } from "@/lib/attribution";
-
-const ResultId = z.uuid();
 
 /**
  * The evidence view: source document with the gold span highlighted and chunk boundaries overlaid,
@@ -24,7 +22,7 @@ export default async function ResultPage({ params }: { params: Promise<{ resultI
   // Same guard as the API routes: a malformed id would otherwise reach Postgres as
   // `eq(uuidColumn, resultId)` and throw an uncaught invalid-uuid error, which Next.js turns into a
   // 500 error page rather than the notFound() page a well-formed-but-unknown id gets.
-  if (!ResultId.safeParse(resultId).success) notFound();
+  if (!parseUuid(resultId)) notFound();
 
   const db = getDb();
   const [owner] = await db.select({ result: questionResults, organizationId: projects.organizationId })

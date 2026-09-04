@@ -136,6 +136,15 @@ describe("chunk-sets api", () => {
     expect(sent.map((s) => s.queue)).toEqual(["chunk"]);
   });
 
+  // requireProject is the one gate every /projects/:projectId route passes through, so guarding the
+  // id there covers the whole resource: a malformed projectId reads as "no such project" (404)
+  // rather than raising an invalid-uuid error out of Postgres (500).
+  it("404s a non-UUID projectId instead of 500ing on an invalid uuid query", async () => {
+    const bad = "not-a-real-id";
+    expect((await listChunkSets(bad, session() as never)).status).toBe(404);
+    expect((await createChunkSet(bad, req({ chunker: "fixed" }), session() as never, fakeSend)).status).toBe(404);
+  });
+
   it("lists sets with chunk counts and blocks foreign orgs", async () => {
     const list = await listChunkSets(projectId, session() as never);
     const { chunkSets } = await list.json();

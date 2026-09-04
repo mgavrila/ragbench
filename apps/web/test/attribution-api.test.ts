@@ -16,6 +16,8 @@ const FOREIGN_ORG = "00000000-0000-0000-0000-000000000000";
 const NON_UUID = "not-a-real-id";
 
 let orgId: string; let projectId: string; let resultId: string;
+/** A result that retrieved the gold chunk, and one that has no retrieval outcome at all yet. */
+let hitResultId: string; let pendingResultId: string;
 const session = () => ({ user: { id: "u", organizationId: orgId } });
 const foreignSession = () => ({ user: { id: "u", organizationId: FOREIGN_ORG } });
 
@@ -74,6 +76,22 @@ beforeAll(async () => {
     retrieved: [{ chunkId: chunk.id, rank: 1, score: 0.5 }], hit: false, reciprocalRank: 0, status: "done",
   }).returning();
   resultId = result.id;
+
+  // question_results is unique on (run, config, question), so the hit and pending rows below get
+  // their own questions rather than a second row for this one.
+  const [hitQuestion, pendingQuestion] = await db.insert(testQuestions).values([
+    { testSetId: testSet.id, documentId: doc.id, question: "Hit?", goldAnswer: "fox", goldStart: 10, goldEnd: 19 },
+    { testSetId: testSet.id, documentId: doc.id, question: "Pending?", goldAnswer: "fox", goldStart: 10, goldEnd: 19 },
+  ]).returning();
+  const [hitResult] = await db.insert(questionResults).values({
+    runId: run.id, configId: config.id, questionId: hitQuestion.id,
+    retrieved: [{ chunkId: chunk.id, rank: 1, score: 0.9 }], hit: true, reciprocalRank: 1, status: "done",
+  }).returning();
+  hitResultId = hitResult.id;
+  const [pendingResult] = await db.insert(questionResults).values({
+    runId: run.id, configId: config.id, questionId: pendingQuestion.id, status: "pending",
+  }).returning();
+  pendingResultId = pendingResult.id;
 });
 
 describe("diagnose api", () => {
@@ -96,6 +114,20 @@ describe("diagnose api", () => {
   it("404s a non-UUID resultId instead of 500ing on an invalid uuid query", async () => {
     const res = await diagnoseResult(NON_UUID, session() as never, fakeSend);
     expect(res.status).toBe(404);
+  });
+
+  // Diagnosis explains why retrieval MISSED the gold span. On a row that hit there is no miss to
+  // explain, and the job it would start is a matrix of counterfactual retrievals plus an LLM call
+  // -- a real bill for an answer to a question nobody asked. Same for a row with no retrieval
+  // outcome yet (hit null): there is nothing to diagnose until the evaluation lands.
+  it("409s a result that hit, and one with no retrieval outcome yet, without enqueueing", async () => {
+    sent.length = 0;
+    for (const id of [hitResultId, pendingResultId]) {
+      const res = await diagnoseResult(id, session() as never, fakeSend);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe("diagnosis explains retrieval misses; this result hit");
+    }
+    expect(sent).toHaveLength(0);
   });
 
   it("404s an unknown (but well-formed) resultId", async () => {

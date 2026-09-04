@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { documents, projects, testQuestions, testSets } from "@ragbench/db";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import type { Session } from "next-auth";
 
 /**
@@ -13,6 +14,7 @@ import type { Session } from "next-auth";
  */
 export async function listQuestions(testSetId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!parseUuid(testSetId)) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const db = getDb();
   const [owner] = await db.select({ organizationId: projects.organizationId })

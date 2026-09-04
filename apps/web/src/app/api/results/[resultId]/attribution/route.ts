@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { attributions, evalRuns, projects, questionResults } from "@ragbench/db";
-import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import type { Session } from "next-auth";
 import type { StoredCounterfactuals } from "@/lib/attribution";
-
-const ResultId = z.uuid();
 
 /**
  * Polling contract (task-2-report.md): `attributions` has no failed/pending state of its own -- a
@@ -19,7 +17,7 @@ const ResultId = z.uuid();
  */
 export async function getAttribution(resultId: string, session: Session | null) {
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (!ResultId.safeParse(resultId).success) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (!parseUuid(resultId)) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const db = getDb();
   const [owner] = await db.select({ organizationId: projects.organizationId, status: questionResults.status })

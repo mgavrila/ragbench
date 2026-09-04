@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import {
-  chunkEmbeddings, chunkSets, chunks, evalRunConfigs, evalRuns, ragConfigs, testQuestions, type Db,
+  chunkEmbeddings, chunkSets, chunks, evalRunConfigs, evalRuns, projects, ragConfigs, testQuestions,
+  type Db,
 } from "@ragbench/db";
 import { enqueue, type JobHandler } from "../queue";
 
@@ -16,8 +17,24 @@ async function failRun(db: Db, runId: string, error: string): Promise<void> {
 
 export const startRunHandler: JobHandler<{ runId: string; organizationId: string }> =
   async ({ runId, organizationId }, { db, boss }) => {
-    const [run] = await db.select().from(evalRuns).where(eq(evalRuns.id, runId));
-    if (!run) return; // deleted meanwhile -- idempotent no-op
+    const [row] = await db.select({ run: evalRuns, organizationId: projects.organizationId })
+      .from(evalRuns)
+      .innerJoin(projects, eq(projects.id, evalRuns.projectId))
+      .where(eq(evalRuns.id, runId));
+    if (!row) return; // deleted meanwhile -- idempotent no-op
+    const { run } = row;
+    // The payload's organizationId is only ever used to meter usage, and the route that enqueues
+    // this job derives it from the run's own ownership chain. Cross-checking it against that chain
+    // here means a job whose payload was tampered with (or crafted by hand against the queue) bills
+    // nothing to the org it names instead of charging one org for another's run. It is a no-op, not
+    // a run failure: the run itself is fine, and re-enqueuing it correctly is the fix.
+    if (row.organizationId !== organizationId) {
+      console.error(
+        `start-run job for run ${runId} claims organization ${organizationId} but the run belongs ` +
+          `to ${row.organizationId}; ignoring`,
+      );
+      return;
+    }
     // A finished or cancelled run is never re-fanned-out: a re-delivered job must not resurrect it.
     // A `failed` run IS re-fanned-out, so re-enqueuing start-run is how a user retries one after
     // fixing what it named (embedding the chunk set, adding a config).

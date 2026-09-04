@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { evalRuns, projects, questionResults } from "@ragbench/db";
-import { z } from "zod";
 import { getDb } from "@/lib/db";
 import { auth } from "@/auth";
+import { parseUuid } from "@/lib/params";
 import { sendJob } from "@/lib/queue";
 import type { Session } from "next-auth";
-
-const ResultId = z.uuid();
 
 /**
  * Org-scoped outside `/projects/:projectId`: walk result -> run -> project -> organizationId, same
@@ -22,16 +20,29 @@ export async function diagnoseResult(
   if (!session?.user?.organizationId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   // A malformed id would otherwise reach Postgres as `eq(uuidColumn, resultId)` and come back as an
   // uncaught "invalid input syntax for type uuid" -- a 500, not a 404. Guarded here before any query.
-  if (!ResultId.safeParse(resultId).success) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (!parseUuid(resultId)) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const db = getDb();
-  const [owner] = await db.select({ organizationId: projects.organizationId })
+  const [owner] = await db.select({ organizationId: projects.organizationId, hit: questionResults.hit })
     .from(questionResults)
     .innerJoin(evalRuns, eq(evalRuns.id, questionResults.runId))
     .innerJoin(projects, eq(projects.id, evalRuns.projectId))
     .where(eq(questionResults.id, resultId));
   if (!owner || owner.organizationId !== session.user.organizationId) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+  // Diagnosis answers "why did retrieval miss the gold span?", so it is only offered on a row that
+  // actually missed. A hit (or a row that has no retrieval result yet -- hit null on a pending or
+  // retrieval-failed row) has no miss to explain, and spending a matrix of counterfactual
+  // retrievals plus an LLM call on one is a bill for an answer nobody asked for. Rejected here
+  // rather than in the worker: the handler stays permissive on purpose (it is total over hit and
+  // miss alike, and the evidence view still renders a diagnosis that already exists), so this is
+  // the gate on what gets STARTED.
+  if (owner.hit !== false) {
+    return NextResponse.json(
+      { error: "diagnosis explains retrieval misses; this result hit" },
+      { status: 409 },
+    );
   }
 
   try {

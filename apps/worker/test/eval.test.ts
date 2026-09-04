@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { and, eq } from "drizzle-orm";
 import {
   createDb, organizations, projects, documents, chunkEmbeddings, chunkSets, chunks, evalRunConfigs,
@@ -249,6 +249,35 @@ describe("startRunHandler", () => {
     expect(after.status).toBe("failed");
     expect(after.error).toContain("zero-k");
     expect(after.error).toContain("topK 0");
+  });
+
+  // The payload's organizationId is what every downstream job meters against, so a job claiming an
+  // organization the run does not belong to must not fan out: doing so would bill one org for
+  // another's run. A no-op rather than a run failure -- the run is fine, the job was wrong.
+  it("no-ops, logging, when the job's organizationId is not the run's owner", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const [other] = await ctx.db.insert(organizations).values({ name: "other-org" }).returning();
+      const [cfg] = await ctx.db.insert(ragConfigs).values({
+        projectId, name: "wrong-org", chunkSetId: setId, embeddingModel: "mock-embedding", topK: 2,
+      }).returning();
+      const run = await makeRun("retrieval-only");
+      await ctx.db.insert(evalRunConfigs).values({ runId: run.id, configId: cfg.id });
+
+      sentJobs.length = 0;
+      await startRunHandler(
+        { runId: run.id, organizationId: other.id },
+        { db: ctx.db, boss: recordingBoss },
+      );
+
+      expect(sentJobs).toEqual([]);
+      const [after] = await ctx.db.select().from(evalRuns).where(eq(evalRuns.id, run.id));
+      expect(after.status).toBe("pending"); // untouched: not started, not failed
+      expect(after.totalJobs).toBe(0);
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining(run.id));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("no-ops on a missing, done or cancelled run", async () => {
