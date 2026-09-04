@@ -35,6 +35,11 @@ function evalConcurrency(): number {
 export async function startWorker(opts: {
   databaseUrl: string;
   handlers: Record<string, JobHandler<any>>;
+  // Cron schedules to register once every named queue exists. pg-boss's `schedule` table has a
+  // foreign key on queue name (see its plans.js), so a schedule for a queue not yet created throws
+  // "Queue X not found" -- registering these AFTER the createQueue loop below is what makes that
+  // safe regardless of call order in the caller.
+  schedules?: Array<{ name: string; cron: string }>;
 }) {
   const boss = new PgBoss(opts.databaseUrl);
   // Sized for the fan-out: every concurrent evaluate-question job holds a connection for the whole
@@ -86,6 +91,14 @@ export async function startWorker(opts: {
     await boss.work(name, { localConcurrency }, async (jobs) => {
       for (const job of jobs) await handler(job.data, { db, boss });
     });
+  }
+
+  // No singletonKey: the target queue's "exclusive" policy above then keys on the implicit
+  // empty-string key, so a tick whose previous job is still created/retrying/active is dropped
+  // rather than queued -- at most one reconcile job in flight at a time, which is what lets it be
+  // safely idempotent instead of needing its own overlap guard.
+  for (const { name, cron } of opts.schedules ?? []) {
+    await boss.schedule(name, cron);
   }
 
   return {

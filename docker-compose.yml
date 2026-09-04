@@ -1,3 +1,8 @@
+# Dev only: runs the database against a host-published port (5433, matching .env.example) so
+# `pnpm dev`/`pnpm test`/`pnpm e2e` on the host can reach it directly. A fresh-host deployment uses
+# docker-compose.prod.yml instead, which also runs the app and worker (this file runs neither --
+# both are started with `pnpm dev` against the database below) and does not publish the database
+# port at all.
 services:
   postgres:
     image: pgvector/pgvector:pg17

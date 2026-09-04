@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -12,10 +13,10 @@
     "@ragbench/db": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "pg-boss": "^12.29.0",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.8.1",
+    "tsx": "^4.23.13"
   },
   "devDependencies": {
-    "tsx": "^4.23.13",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11"
   }

@@ -1,0 +1,97 @@
+# For a fresh host: `docker compose -f docker-compose.prod.yml up -d --build`, then create the
+# first account at /signup (see README) and set DISABLE_SIGNUP=1 below once it exists.
+#
+# Unlike docker-compose.yml (dev, port 5433 published so a host-side psql/GUI client can reach it),
+# nothing here publishes the database port: only `app` needs to be reachable from outside this
+# compose project. Reach the database with `docker compose -f docker-compose.prod.yml exec db psql
+# -U ragbench` if you need a shell on it.
+services:
+  db:
+    # pg16 to match CI's postgres service (.github/workflows/ci.yml), not the pg17 the dev compose
+    # file runs -- this is the version the app is actually tested against.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: "ragbench"
+      # No default: an empty/weak password on a database with no other access control is the whole
+      # ballgame. Generate one with `openssl rand -base64 24` (or any password manager) and put it
+      # in a .env file next to this compose file (docker compose reads .env automatically) or export
+      # it in the shell that runs `docker compose up`.
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, e.g. openssl rand -base64 24}"
+      POSTGRES_DB: "ragbench"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragbench"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: ragbench:latest
+    # The image's default CMD (see Dockerfile) is already the web app; spelled out here anyway so
+    # this file stays correct if that default ever changes.
+    command: ["node", "web/apps/web/server.js"]
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgres://ragbench:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, e.g. openssl rand -base64 24}@db:5432/ragbench"
+      # next-auth v5 refuses to start without a secret in production. Generate with:
+      #   openssl rand -base64 32
+      AUTH_SECRET: "${AUTH_SECRET:?generate one with openssl rand -base64 32}"
+      # next-auth trusts the Host header only when this is set -- required whenever the app sits
+      # behind a reverse proxy / load balancer (i.e. essentially always outside localhost).
+      AUTH_TRUST_HOST: "1"
+      # Explicit rather than left to default: web and worker share this image's WORKDIR (/app), so
+      # their unset defaults (process.cwd()/uploads -- see packages/db/src/files.ts) would actually
+      # agree by accident. Set anyway so the two processes' agreement is a documented contract, not
+      # a coincidence of how the image happens to be laid out.
+      RAGBENCH_UPLOADS_DIR: "/app/uploads"
+      # Set to 1 once the first account exists (see README) to close the signup route/page to
+      # everyone else. Unset (the default) leaves signup open, same as dev.
+      DISABLE_SIGNUP: "${DISABLE_SIGNUP:-}"
+      RAGBENCH_EVAL_CONCURRENCY: "${RAGBENCH_EVAL_CONCURRENCY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: ragbench:latest
+    # tsx directly, not `pnpm --filter @ragbench/worker start`: this is the hot path for every
+    # deploy, and going through pnpm would mean resolving the workspace filter on every container
+    # start for no benefit -- the image already has exactly the one package's node_modules this
+    # needs (see Dockerfile). `pnpm db:migrate` is still available by hand for a manual migration
+    # (`docker compose -f docker-compose.prod.yml exec worker pnpm db:migrate`); the worker's own
+    # boot sequence calls migrateDb() in-process regardless (see apps/worker/src/main.ts).
+    command: ["apps/worker/node_modules/.bin/tsx", "apps/worker/src/main.ts"]
+    # The image's HEALTHCHECK (see Dockerfile) probes the web app's /api/health over HTTP; the
+    # worker serves nothing on port 3000, so without this override it would report perpetually
+    # unhealthy despite running fine -- confirmed by an actual `docker compose up` smoke test.
+    healthcheck:
+      disable: true
+    environment:
+      DATABASE_URL: "postgres://ragbench:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD, e.g. openssl rand -base64 24}@db:5432/ragbench"
+      RAGBENCH_UPLOADS_DIR: "/app/uploads"
+      RAGBENCH_EVAL_CONCURRENCY: "${RAGBENCH_EVAL_CONCURRENCY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:

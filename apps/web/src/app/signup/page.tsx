@@ -11,6 +11,24 @@ export default async function SignupPage({
 }) {
   const { error } = await searchParams;
 
+  // Read directly rather than routed through the server action below: this decides what the page
+  // renders, not just what the submit does, so a disabled deployment never shows the form at all --
+  // matching the API route's own check in apps/web/src/app/api/signup/route.ts.
+  if (process.env.DISABLE_SIGNUP === "1") {
+    return (
+      <main className="rb-auth">
+        <div className="rb-auth__card">
+          <span className={cls.eyebrow}>RAGBench</span>
+          <h1>Create an account</h1>
+          <Notice tone="neutral" role="status">Signups are disabled on this deployment.</Notice>
+          <p className="rb-auth__foot">
+            Already have one? <Link href="/login">Log in</Link>
+          </p>
+        </div>
+      </main>
+    );
+  }
+
   async function doSignup(formData: FormData) {
     "use server";
     const result = await registerUser({
