@@ -76,7 +76,7 @@ flowchart LR
     G --> H{Miss?}
     H -->|yes, user clicks Diagnose| I[attribute]
     H -->|no| J[Done]
-    I --> K[Counterfactual re-retrieval:\nalt chunker / embedder / top-k]
+    I --> K["Counterfactual re-retrieval:\nalt chunker / embedder / top-k"]
     K --> L[Deterministic verdict]
     L --> M[LLM writes explanation]
 ```
@@ -107,7 +107,7 @@ Any key you don't set simply makes its models unavailable in the UI; the rest of
   |---|---|
   | Gold chunk ranked just outside top-k; a larger k recovers it | `retrieval` |
   | Gold span straddles a chunk boundary, and/or another chunker's set retrieves it | `chunking` |
-  | Gold span intact in one chunk, but this embedder doesn't rank it in; another embedder does | `embedding` |
+  | Gold span intact in one chunk, but this embedder doesn't rank it inside top-k, and/or another embedder does | `embedding` |
   | No configuration — original or any counterfactual — retrieves a chunk overlapping the gold span | `unanswerable` |
 
   See [`docs/superpowers/specs/2026-09-03-ragbench-design.md`](docs/superpowers/specs/2026-09-03-ragbench-design.md) §7 for the full spec.
